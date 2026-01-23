@@ -1,31 +1,40 @@
 import { useState } from 'react'
 import MermaidDiagram from './MermaidDiagram'
+import MarkdownRenderer from './MarkdownRenderer'
 
 export default function AnalysisResults({ data }) {
     const [activeSection, setActiveSection] = useState('overview')
+    const [activeDiagram, setActiveDiagram] = useState('architecture')
 
     const { analysis, documentation, diagrams } = data
 
     const sections = [
-        { id: 'overview', label: '📋 Overview', icon: '📋' },
-        { id: 'architecture', label: '🏗️ Architecture', icon: '🏗️' },
-        { id: 'diagrams', label: '📊 Diagrams', icon: '📊' },
-        { id: 'docs', label: '📄 Documentation', icon: '📄' },
+        { id: 'overview', label: 'Overview', icon: '📋' },
+        { id: 'architecture', label: 'Architecture', icon: '🏗️' },
+        { id: 'diagrams', label: 'Diagrams', icon: '📊' },
+        { id: 'docs', label: 'Documentation', icon: '📄' },
+    ]
+
+    const diagramTypes = [
+        { id: 'architecture', label: 'Architecture' },
+        { id: 'class_diagram', label: 'Class Diagram' },
+        { id: 'flowchart', label: 'Flowchart' },
     ]
 
     return (
         <div className="animate-fade-in space-y-6">
             {/* Section tabs */}
-            <div className="flex gap-2 overflow-x-auto pb-2">
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 {sections.map((section) => (
                     <button
                         key={section.id}
                         onClick={() => setActiveSection(section.id)}
-                        className={`px-4 py-2 rounded-lg whitespace-nowrap transition-all ${activeSection === section.id
-                                ? 'bg-indigo-600 text-white'
-                                : 'bg-white/5 text-white/60 hover:bg-white/10'
+                        className={`px-4 py-2.5 rounded-xl whitespace-nowrap transition-all flex items-center gap-2 ${activeSection === section.id
+                                ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg'
+                                : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
                             }`}
                     >
+                        <span>{section.icon}</span>
                         {section.label}
                     </button>
                 ))}
@@ -34,111 +43,181 @@ export default function AnalysisResults({ data }) {
             {/* Content */}
             <div className="card">
                 {activeSection === 'overview' && (
-                    <div className="space-y-6">
-                        <div>
-                            <h3 className="text-lg font-semibold text-white mb-2">Overview</h3>
-                            <p className="text-white/70">{analysis?.overview || 'No overview available'}</p>
+                    <div className="space-y-6 animate-fade-in">
+                        {/* Hero section */}
+                        <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 rounded-xl p-6 border border-white/10">
+                            <h3 className="text-2xl font-bold text-white mb-3">{analysis?.overview || 'Project Overview'}</h3>
+                            <p className="text-white/70 text-lg leading-relaxed">{analysis?.purpose || 'No purpose available'}</p>
                         </div>
 
-                        <div>
-                            <h3 className="text-lg font-semibold text-white mb-2">Purpose</h3>
-                            <p className="text-white/70">{analysis?.purpose || 'No purpose available'}</p>
-                        </div>
-
-                        <div className="grid md:grid-cols-2 gap-4">
-                            <div className="bg-white/5 rounded-xl p-4">
-                                <h4 className="text-sm font-medium text-white/50 mb-2">Languages</h4>
+                        {/* Stats Grid */}
+                        <div className="grid md:grid-cols-3 gap-4">
+                            <div className="bg-white/5 rounded-xl p-5 border border-white/10 hover:border-indigo-500/30 transition-colors">
+                                <h4 className="text-sm font-medium text-white/50 mb-3 flex items-center gap-2">
+                                    <span>💻</span> Languages
+                                </h4>
                                 <div className="flex flex-wrap gap-2">
                                     {analysis?.technologies?.languages?.map((lang) => (
-                                        <span key={lang} className="px-2 py-1 bg-indigo-500/20 text-indigo-300 rounded text-sm">
+                                        <span key={lang} className="px-3 py-1.5 bg-indigo-500/20 text-indigo-300 rounded-lg text-sm font-medium">
                                             {lang}
                                         </span>
-                                    ))}
+                                    )) || <span className="text-white/40">None detected</span>}
                                 </div>
                             </div>
 
-                            <div className="bg-white/5 rounded-xl p-4">
-                                <h4 className="text-sm font-medium text-white/50 mb-2">Complexity</h4>
-                                <span className={`px-3 py-1 rounded-full text-sm ${analysis?.complexity === 'low' ? 'bg-green-500/20 text-green-300' :
+                            <div className="bg-white/5 rounded-xl p-5 border border-white/10 hover:border-indigo-500/30 transition-colors">
+                                <h4 className="text-sm font-medium text-white/50 mb-3 flex items-center gap-2">
+                                    <span>📦</span> Frameworks
+                                </h4>
+                                <div className="flex flex-wrap gap-2">
+                                    {analysis?.technologies?.frameworks?.map((fw) => (
+                                        <span key={fw} className="px-3 py-1.5 bg-purple-500/20 text-purple-300 rounded-lg text-sm font-medium">
+                                            {fw}
+                                        </span>
+                                    )) || <span className="text-white/40">None detected</span>}
+                                </div>
+                            </div>
+
+                            <div className="bg-white/5 rounded-xl p-5 border border-white/10 hover:border-indigo-500/30 transition-colors">
+                                <h4 className="text-sm font-medium text-white/50 mb-3 flex items-center gap-2">
+                                    <span>📊</span> Complexity
+                                </h4>
+                                <span className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${analysis?.complexity === 'low' ? 'bg-green-500/20 text-green-300' :
                                         analysis?.complexity === 'medium' ? 'bg-yellow-500/20 text-yellow-300' :
                                             'bg-red-500/20 text-red-300'
                                     }`}>
-                                    {analysis?.complexity || 'Unknown'}
+                                    {analysis?.complexity === 'low' && '🟢 '}
+                                    {analysis?.complexity === 'medium' && '🟡 '}
+                                    {analysis?.complexity === 'high' && '🔴 '}
+                                    {analysis?.complexity?.charAt(0).toUpperCase() + analysis?.complexity?.slice(1) || 'Unknown'}
                                 </span>
                             </div>
                         </div>
 
-                        {analysis?.strengths && (
-                            <div>
-                                <h3 className="text-lg font-semibold text-white mb-2">Strengths</h3>
-                                <ul className="space-y-1">
-                                    {analysis.strengths.map((s, i) => (
-                                        <li key={i} className="text-white/70 flex items-start gap-2">
-                                            <span className="text-green-400">✓</span> {s}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                        )}
+                        {/* Strengths & Improvements */}
+                        <div className="grid md:grid-cols-2 gap-6">
+                            {analysis?.strengths && (
+                                <div className="bg-white/5 rounded-xl p-5 border border-white/10">
+                                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                        <span className="text-green-400">✓</span> Strengths
+                                    </h3>
+                                    <ul className="space-y-2">
+                                        {analysis.strengths.map((s, i) => (
+                                            <li key={i} className="text-white/70 flex items-start gap-2">
+                                                <span className="text-green-400 mt-1">•</span> {s}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {analysis?.improvements && (
+                                <div className="bg-white/5 rounded-xl p-5 border border-white/10">
+                                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                        <span className="text-yellow-400">💡</span> Suggested Improvements
+                                    </h3>
+                                    <ul className="space-y-2">
+                                        {analysis.improvements.map((s, i) => (
+                                            <li key={i} className="text-white/70 flex items-start gap-2">
+                                                <span className="text-yellow-400 mt-1">•</span> {s}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
 
                 {activeSection === 'architecture' && (
-                    <div className="space-y-6">
-                        <div>
-                            <h3 className="text-lg font-semibold text-white mb-2">Architecture Pattern</h3>
-                            <p className="text-white/70">{analysis?.architecture?.pattern || 'N/A'}</p>
+                    <div className="space-y-6 animate-fade-in">
+                        <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 rounded-xl p-6 border border-white/10">
+                            <h3 className="text-xl font-semibold text-white mb-2">Architecture Pattern</h3>
+                            <p className="text-2xl font-bold text-indigo-400">{analysis?.architecture?.pattern || 'N/A'}</p>
                         </div>
 
                         <div>
-                            <h3 className="text-lg font-semibold text-white mb-2">Components</h3>
+                            <h3 className="text-lg font-semibold text-white mb-4">Components</h3>
                             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
                                 {analysis?.architecture?.components?.map((comp, i) => (
-                                    <div key={i} className="bg-white/5 rounded-lg p-3 border border-white/10">
-                                        <span className="text-white/80">{comp}</span>
+                                    <div key={i} className="bg-white/5 rounded-xl p-4 border border-white/10 hover:border-indigo-500/30 transition-all hover:scale-[1.02]">
+                                        <span className="text-white/80 font-medium">{comp}</span>
                                     </div>
-                                ))}
+                                )) || <p className="text-white/50">No components detected</p>}
                             </div>
                         </div>
 
                         <div>
-                            <h3 className="text-lg font-semibold text-white mb-2">Description</h3>
-                            <p className="text-white/70">{analysis?.architecture?.description || 'N/A'}</p>
+                            <h3 className="text-lg font-semibold text-white mb-3">Description</h3>
+                            <p className="text-white/70 leading-relaxed bg-white/5 rounded-xl p-4">
+                                {analysis?.architecture?.description || 'N/A'}
+                            </p>
                         </div>
+
+                        {analysis?.entry_points && (
+                            <div>
+                                <h3 className="text-lg font-semibold text-white mb-3">Entry Points</h3>
+                                <div className="flex flex-wrap gap-2">
+                                    {analysis.entry_points.map((ep, i) => (
+                                        <span key={i} className="px-3 py-1.5 bg-green-500/20 text-green-300 rounded-lg text-sm font-mono">
+                                            {ep}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 
                 {activeSection === 'diagrams' && (
-                    <div className="space-y-6">
-                        {diagrams?.class_diagram && (
-                            <div>
-                                <h3 className="text-lg font-semibold text-white mb-3">Class Diagram</h3>
-                                <MermaidDiagram code={diagrams.class_diagram} />
-                            </div>
-                        )}
-                        {diagrams?.flowchart && (
-                            <div>
-                                <h3 className="text-lg font-semibold text-white mb-3">Flowchart</h3>
-                                <MermaidDiagram code={diagrams.flowchart} />
-                            </div>
-                        )}
-                        {diagrams?.architecture && (
-                            <div>
-                                <h3 className="text-lg font-semibold text-white mb-3">Architecture</h3>
-                                <MermaidDiagram code={diagrams.architecture} />
-                            </div>
-                        )}
-                        {!diagrams && (
-                            <p className="text-white/50">No diagrams available</p>
-                        )}
+                    <div className="space-y-6 animate-fade-in">
+                        {/* Diagram type tabs */}
+                        <div className="flex gap-2 border-b border-white/10 pb-4">
+                            {diagramTypes.map((type) => (
+                                <button
+                                    key={type.id}
+                                    onClick={() => setActiveDiagram(type.id)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeDiagram === type.id
+                                            ? 'bg-indigo-500 text-white'
+                                            : 'text-white/60 hover:text-white hover:bg-white/10'
+                                        }`}
+                                >
+                                    {type.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="bg-white/5 rounded-xl p-6 min-h-[400px]">
+                            {diagrams?.[activeDiagram] ? (
+                                <MermaidDiagram code={diagrams[activeDiagram]} />
+                            ) : (
+                                <div className="flex items-center justify-center h-64 text-white/40">
+                                    <div className="text-center">
+                                        <span className="text-4xl mb-4 block">📊</span>
+                                        <p>No {activeDiagram.replace('_', ' ')} available</p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
 
                 {activeSection === 'docs' && (
-                    <div className="prose prose-invert max-w-none">
-                        <pre className="bg-white/5 p-4 rounded-xl overflow-x-auto text-sm">
-                            {documentation || 'No documentation generated'}
-                        </pre>
+                    <div className="animate-fade-in">
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xl font-semibold text-white">Generated Documentation</h3>
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText(documentation || '')
+                                }}
+                                className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white/70 hover:text-white transition-all flex items-center gap-2"
+                            >
+                                <span>📋</span> Copy All
+                            </button>
+                        </div>
+                        <div className="bg-white/5 rounded-xl p-6 border border-white/10">
+                            <MarkdownRenderer content={documentation} />
+                        </div>
                     </div>
                 )}
             </div>

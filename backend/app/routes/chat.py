@@ -4,7 +4,7 @@ Chat Routes - Conversational interface for code Q&A
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 import json
 
 from app.services.llm_service import LLMService
@@ -25,7 +25,8 @@ class ChatRequest(BaseModel):
     """Chat request payload"""
     message: str
     conversation_id: Optional[str] = None
-    context: Optional[dict] = None  # Analysis context if available
+    history: Optional[List[Dict]] = None
+    context: Optional[dict] = None
 
 
 @router.post("/")
@@ -34,12 +35,10 @@ async def chat(request: ChatRequest):
     Send a message and get AI response.
     Streams the response for real-time display.
     """
-    # Get or create conversation
     conv_id = request.conversation_id or "default"
     if conv_id not in conversations:
         conversations[conv_id] = []
     
-    # Add user message
     conversations[conv_id].append({
         "role": "user",
         "content": request.message
@@ -51,13 +50,12 @@ async def chat(request: ChatRequest):
         
         async for chunk in llm.chat_stream(
             message=request.message,
-            history=conversations[conv_id][:-1],  # Exclude current message
+            history=conversations[conv_id][:-1],
             context=request.context
         ):
             full_response += chunk
             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
         
-        # Save assistant response
         conversations[conv_id].append({
             "role": "assistant", 
             "content": full_response
@@ -68,6 +66,38 @@ async def chat(request: ChatRequest):
     return StreamingResponse(
         generate_response(),
         media_type="text/event-stream"
+    )
+
+
+@router.post("/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Stream chat responses directly without SSE wrapper.
+    Returns raw text chunks for simpler frontend consumption.
+    """
+    async def generate():
+        try:
+            llm = LLMService()
+            
+            history = request.history or []
+            
+            async for chunk in llm.chat_stream(
+                message=request.message,
+                history=history,
+                context=request.context
+            ):
+                yield chunk
+                
+        except Exception as e:
+            yield f"\n\n❌ Error: {str(e)}"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
     )
 
 
