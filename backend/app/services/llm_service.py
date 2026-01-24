@@ -243,26 +243,42 @@ Return ONLY valid JSON."""
                 "model": self.ollama_model,
                 "prompt": prompt,
                 "stream": False,
-                "format": "json" if json_mode else None,
                 "options": {
-                    "temperature": 0.3,  # Lower temperature for more consistent JSON
-                    "num_ctx": 8192      # Increase context window if possible
+                    "temperature": 0.3,
+                    "num_ctx": 8192
                 }
             }
+            
+            # Only add format for json_mode
+            if json_mode:
+                payload["format"] = "json"
+            
+            # DEBUG: Print what we're sending
+            print(f"\n🔍 DEBUG - Ollama Request:")
+            print(f"URL: {self.ollama_base_url}/api/generate")
+            print(f"Model: {self.ollama_model}")
+            print(f"JSON Mode: {json_mode}")
+            print(f"Payload keys: {payload.keys()}\n")
+            
             try:
                 response = await client.post(
                     f"{self.ollama_base_url}/api/generate",
-                    json=payload
+                    json=payload,
+                    timeout=300.0
                 )
                 response.raise_for_status()
                 result = response.json()
                 text = result.get("response", "")
-                
+
                 if json_mode:
                     return self._parse_json(text)
                 return text
+            except httpx.HTTPStatusError as e:
+                print(f"❌ HTTP Error: {e.response.status_code}")
+                print(f"Response: {e.response.text}")
+                raise Exception(f"Ollama Error: {e}")
             except Exception as e:
-                print(f"Ollama Error: {e}")
+                print(f"❌ Ollama Error: {e}")
                 raise
 
     async def _ollama_stream(self, messages: List[Dict]) -> AsyncGenerator[str, None]:
