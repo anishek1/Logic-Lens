@@ -105,7 +105,7 @@ LogicLens works as your personal AI pair programmer that can clone, analyze, and
 
 ## 🤝 Contributing
 
-Contributions are welcome. Feel free to open an issue or submit a pull request.
+Contributions are welcome! Please open an issue or submit a PR.
 
 ## 📄 License
 
