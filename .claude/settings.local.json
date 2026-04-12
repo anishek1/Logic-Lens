@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp -r \"C:/Users/anish/.claude/skills/_stitch_tmp/skills/design-md\" \"C:/Users/anish/.claude/skills/design-md\")",
+      "Bash(cp -r \"C:/Users/anish/.claude/skills/_stitch_tmp/skills/enhance-prompt\" \"C:/Users/anish/.claude/skills/enhance-prompt\")",
+      "Bash(cp -r \"C:/Users/anish/.claude/skills/_uiux_tmp/.claude/skills/design\" \"C:/Users/anish/.claude/skills/ckm-design\")",
+      "Bash(cp -r \"C:/Users/anish/.claude/skills/_uiux_tmp/.claude/skills/brand\" \"C:/Users/anish/.claude/skills/ckm-brand\")",
+      "Bash(cp -r \"C:/Users/anish/.claude/skills/_uiux_tmp/.claude/skills/banner-design\" \"C:/Users/anish/.claude/skills/ckm-banner-design\")"
+    ]
+  }
+}
