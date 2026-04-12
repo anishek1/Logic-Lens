@@ -38,3 +38,5 @@ output/
 *.exe
 *.msi
 OllamaSetup.exe
+.claude/
+CLAUDE.md
