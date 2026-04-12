@@ -76,8 +76,8 @@ async def generate_readme(request: DocumentationRequest):
     """
     try:
         llm = LLMService()
-        readme = await llm.generate_readme(request.analysis)
-        
+        readme = await llm.generate_documentation(request.analysis)
+
         return {
             "filename": "README.md",
             "content": readme

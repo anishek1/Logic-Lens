@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import MarkdownRenderer from './MarkdownRenderer'
 
-export default function ChatPanel({ context }) {
+export default function ChatPanel({ context, jobId, onBackToAnalysis }) {
     const [messages, setMessages] = useState([])
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
@@ -36,7 +36,8 @@ export default function ChatPanel({ context }) {
                 body: JSON.stringify({
                     message: userMessage,
                     history: messages,
-                    context: context?.analysis
+                    context: context?.analysis,
+                    job_id: jobId
                 })
             })
 
@@ -78,6 +79,25 @@ export default function ChatPanel({ context }) {
         "How can I improve this code?",
     ]
 
+    // No analysis yet — show a blocker with a back button
+    if (!context || !jobId) {
+        return (
+            <div className="card flex flex-col items-center justify-center py-20 text-center animate-fade-in">
+                <span className="text-5xl mb-4">🔍</span>
+                <h2 className="text-xl font-semibold text-white mb-2">No codebase analyzed yet</h2>
+                <p className="text-white/50 mb-6 max-w-sm">
+                    Analyze a GitHub repository first. The chat will use RAG to search the actual source code when answering your questions.
+                </p>
+                <button
+                    onClick={onBackToAnalysis}
+                    className="px-6 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium hover:opacity-90 transition-opacity"
+                >
+                    ← Go to Analyze
+                </button>
+            </div>
+        )
+    }
+
     return (
         <div className="card h-[calc(100vh-250px)] flex flex-col animate-fade-in">
             {/* Header */}
@@ -88,17 +108,27 @@ export default function ChatPanel({ context }) {
                     </div>
                     <div>
                         <h2 className="text-lg font-semibold text-white">Code Assistant</h2>
-                        <p className="text-sm text-white/50">Ask questions about the analyzed codebase</p>
+                        <p className="text-sm text-white/50">
+                            RAG-powered — searches actual source code for every answer
+                        </p>
                     </div>
                 </div>
-                {messages.length > 0 && (
+                <div className="flex items-center gap-2">
+                    {messages.length > 0 && (
+                        <button
+                            onClick={() => setMessages([])}
+                            className="text-sm text-white/50 hover:text-white transition-colors px-3 py-1 hover:bg-white/10 rounded-lg"
+                        >
+                            Clear chat
+                        </button>
+                    )}
                     <button
-                        onClick={() => setMessages([])}
+                        onClick={onBackToAnalysis}
                         className="text-sm text-white/50 hover:text-white transition-colors px-3 py-1 hover:bg-white/10 rounded-lg"
                     >
-                        Clear chat
+                        ← Analysis
                     </button>
-                )}
+                </div>
             </div>
 
             {/* Messages */}

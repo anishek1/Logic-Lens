@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 
 const ANALYSIS_STEPS = [
     { id: 'clone', label: 'Cloning Repository', icon: '📥' },
-    { id: 'parse', label: 'Parsing Code Files', icon: '📂' },
+    { id: 'embed', label: 'Building Search Index', icon: '🔎' },
     { id: 'analyze', label: 'AI Analysis', icon: '🤖' },
     { id: 'docs', label: 'Generating Documentation', icon: '📄' },
     { id: 'diagrams', label: 'Creating Diagrams', icon: '📊' },
@@ -20,14 +20,20 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
     const [progress, setProgress] = useState(0)
     const [currentStep, setCurrentStep] = useState(0)
     const [status, setStatus] = useState('connecting')
-    const eventSourceRef = useRef(null)
+
+    // Store callbacks in refs so the EventSource effect doesn't re-run when
+    // parent re-renders (new function references every render).
+    const onCompleteRef = useRef(onComplete)
+    const onErrorRef = useRef(onError)
+    useEffect(() => {
+        onCompleteRef.current = onComplete
+        onErrorRef.current = onError
+    })
 
     useEffect(() => {
         if (!jobId) return
 
-        // Connect to SSE stream
         const eventSource = new EventSource(`/api/analyze/stream/${jobId}`)
-        eventSourceRef.current = eventSource
 
         eventSource.onmessage = (event) => {
             try {
@@ -38,10 +44,10 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
 
                 if (data.status === 'completed') {
                     eventSource.close()
-                    onComplete?.()
+                    onCompleteRef.current?.()
                 } else if (data.status === 'failed') {
                     eventSource.close()
-                    onError?.(data.error || 'Analysis failed')
+                    onErrorRef.current?.(data.error || 'Analysis failed')
                 }
             } catch (e) {
                 console.error('SSE parse error:', e)
@@ -53,10 +59,8 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
             eventSource.close()
         }
 
-        return () => {
-            eventSource.close()
-        }
-    }, [jobId, onComplete, onError])
+        return () => eventSource.close()
+    }, [jobId]) // jobId only — callbacks go through refs
 
     return (
         <div className="card animate-fade-in">
@@ -65,7 +69,7 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
                     <span className="text-3xl">🔍</span>
                 </div>
                 <h2 className="text-2xl font-bold text-white mb-2">Analyzing Repository</h2>
-                <p className="text-white/60">This may take a moment...</p>
+                <p className="text-white/60">This may take a moment…</p>
             </div>
 
             {/* Progress bar */}
@@ -84,8 +88,6 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
                 {ANALYSIS_STEPS.map((step, index) => {
                     const isComplete = index < currentStep
                     const isCurrent = index === currentStep
-                    const isPending = index > currentStep
-
                     return (
                         <div
                             key={step.id}
@@ -98,10 +100,8 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
                             }`}
                         >
                             <div className={`flex items-center justify-center w-10 h-10 rounded-full transition-all ${
-                                isComplete
-                                    ? 'bg-green-500 text-white'
-                                    : isCurrent
-                                    ? 'bg-indigo-500 text-white animate-pulse'
+                                isComplete ? 'bg-green-500 text-white'
+                                    : isCurrent ? 'bg-indigo-500 text-white animate-pulse'
                                     : 'bg-white/10 text-white/40'
                             }`}>
                                 {isComplete ? (

@@ -11,6 +11,7 @@ import uuid
 
 from app.services.code_parser import CodeParser
 from app.services.llm_service import LLMService
+from app.services.embedding_service import get_embedding_service
 from app.models.schemas import AnalysisRequest, AnalysisResponse
 
 router = APIRouter()
@@ -61,12 +62,17 @@ async def run_analysis(job_id: str, repo_url: Optional[str], local_path: Optiona
         # Step 1: Clone/load repository
         analysis_jobs[job_id]["progress"] = 10
         parser = CodeParser()
-        
+
         if repo_url:
             code_files = await parser.clone_and_parse(repo_url)
         else:
             code_files = await parser.parse_local(local_path)
-        
+
+        # Step 2: Build RAG vector index from source files
+        analysis_jobs[job_id]["progress"] = 25
+        embedder = get_embedding_service()
+        await embedder.build_index(code_files, job_id)
+
         analysis_jobs[job_id]["progress"] = 30
         
         # Step 2: Analyze with LLM
@@ -88,7 +94,7 @@ async def run_analysis(job_id: str, repo_url: Optional[str], local_path: Optiona
         analysis_jobs[job_id]["results"] = {
             "analysis": analysis,
             "documentation": documentation,
-            "diagrams": diagrams
+            "diagrams": diagrams,
         }
         
     except Exception as e:
