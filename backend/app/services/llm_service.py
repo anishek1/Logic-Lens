@@ -298,6 +298,7 @@ Return ONLY valid JSON."""
         client = AsyncOpenAI(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key=self.nim_api_key,
+            timeout=60.0,
         )
 
         # Thinking disabled for analysis — structured JSON calls don't need deep reasoning
@@ -322,6 +323,7 @@ Return ONLY valid JSON."""
         client = AsyncOpenAI(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key=self.nim_api_key,
+            timeout=120.0,
         )
         try:
             stream = await client.chat.completions.create(
