@@ -13,7 +13,6 @@ import re
 load_dotenv()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-NIM_API_URL  = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 
 def _fix_mermaid(diagram: str) -> str:
@@ -35,7 +34,7 @@ class LLMService:
         self.groq_api_key = os.getenv("GROQ_API_KEY")
         self.groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         self.nim_api_key = os.getenv("NIM_API_KEY")
-        self.nim_model = os.getenv("NIM_MODEL", "meta/llama-3.3-70b-instruct")
+        self.nim_model = os.getenv("NIM_MODEL", "nvidia/nemotron-3-super-120b-a12b")
 
         if self.provider == "nim" and not self.nim_api_key:
             print("⚠️  NIM_API_KEY not found. Falling back to Groq.")
@@ -185,7 +184,10 @@ Return ONLY valid JSON."""
         system_msg = self._build_system_prompt(context, retrieved_chunks)
         messages = self._build_messages(system_msg, history, message)
 
-        if self.provider in ("groq", "nim"):
+        if self.provider == "nim":
+            async for chunk in self._nim_stream(messages):
+                yield chunk
+        elif self.provider == "groq":
             async for chunk in self._groq_stream(messages):
                 yield chunk
         elif self.provider == "ollama":
@@ -290,47 +292,75 @@ Return ONLY valid JSON."""
         raise RuntimeError("Groq rate limit: all 5 retry attempts exhausted.")
 
     async def _generate_nim(self, prompt: str, json_mode: bool):
-        """NVIDIA NIM API — OpenAI-compatible, same structure as Groq."""
-        payload: Dict = {
+        """NVIDIA NIM API via OpenAI SDK. Skips reasoning_content, uses content only."""
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=self.nim_api_key,
+        )
+
+        kwargs: Dict = {
             "model": self.nim_model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": 4096,
+            "max_tokens": 16384,
+            "extra_body": {
+                "chat_template_kwargs": {"enable_thinking": True},
+                "reasoning_budget": 16384,
+            },
         }
         if json_mode:
-            payload["response_format"] = {"type": "json_object"}
+            kwargs["response_format"] = {"type": "json_object"}
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                NIM_API_URL,
-                headers={
-                    "Authorization": f"Bearer {self.nim_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            text = response.json()["choices"][0]["message"]["content"]
-
+        response = await client.chat.completions.create(**kwargs)
+        text = response.choices[0].message.content or ""
         return self._parse_json(text) if json_mode else text
 
-    async def _groq_stream(self, messages: List[Dict]) -> AsyncGenerator[str, None]:
-        # Shared by both groq and nim providers (both are OpenAI-compatible)
-        api_url = NIM_API_URL if self.provider == "nim" else GROQ_API_URL
-        api_key = self.nim_api_key if self.provider == "nim" else self.groq_api_key
-        model   = self.nim_model  if self.provider == "nim" else self.groq_model
+    async def _nim_stream(self, messages: List[Dict]) -> AsyncGenerator[str, None]:
+        """Stream from NVIDIA NIM. Skips reasoning_content tokens, yields only content."""
+        from openai import AsyncOpenAI
 
+        client = AsyncOpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=self.nim_api_key,
+        )
+        try:
+            stream = await client.chat.completions.create(
+                model=self.nim_model,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=16384,
+                stream=True,
+                extra_body={
+                    "chat_template_kwargs": {"enable_thinking": True},
+                    "reasoning_budget": 16384,
+                },
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                # Skip internal reasoning tokens — only surface the final answer
+                if getattr(delta, "reasoning_content", None):
+                    continue
+                if delta.content:
+                    yield delta.content
+        except Exception as e:
+            yield f"\n\nError: {str(e)}"
+
+    async def _groq_stream(self, messages: List[Dict]) -> AsyncGenerator[str, None]:
         async with httpx.AsyncClient(timeout=None) as client:
             try:
                 async with client.stream(
                     "POST",
-                    api_url,
+                    GROQ_API_URL,
                     headers={
-                        "Authorization": f"Bearer {api_key}",
+                        "Authorization": f"Bearer {self.groq_api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": model,
+                        "model": self.groq_model,
                         "messages": messages,
                         "stream": True,
                         "temperature": 0.3,
