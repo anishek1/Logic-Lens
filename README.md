@@ -344,4 +344,4 @@ App available at `http://localhost:8000`
 
 ## License
 
-MIT © [Anishekh Prasad](https://github.com/anishek1)
+MIT © [ Anishekh Prasad ](https://github.com/anishek1)
