@@ -9,5 +9,17 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8000'
     }
+  },
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react':    ['react', 'react-dom'],
+          'vendor-markdown': ['react-markdown', 'remark-gfm', 'react-syntax-highlighter'],
+          'vendor-mermaid':  ['mermaid'],
+        }
+      }
+    }
   }
 })
