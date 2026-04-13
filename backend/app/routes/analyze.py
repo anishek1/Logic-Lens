@@ -2,12 +2,13 @@
 Analysis Routes - Repository analysis and documentation generation
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, HttpUrl
 from typing import Optional
 import asyncio
 import json
 import uuid
+import traceback
 
 from app.services.code_parser import CodeParser
 from app.services.llm_service import LLMService
@@ -58,7 +59,8 @@ async def run_analysis(job_id: str, repo_url: Optional[str], local_path: Optiona
     """Background task to run the actual analysis"""
     try:
         analysis_jobs[job_id]["status"] = "running"
-        
+        print(f"\n▶ Job {job_id}: starting analysis for {repo_url or local_path}")
+
         # Step 1: Clone/load repository
         analysis_jobs[job_id]["progress"] = 10
         parser = CodeParser()
@@ -68,25 +70,37 @@ async def run_analysis(job_id: str, repo_url: Optional[str], local_path: Optiona
         else:
             code_files = await parser.parse_local(local_path)
 
+        print(f"  ✔ Parsed {code_files['file_count']} files, {code_files['total_lines']} lines, languages: {code_files['languages']}")
+        if code_files['file_count'] == 0:
+            raise ValueError(
+                "No supported source files found in this repository. "
+                "LogicLens supports: .py .js .ts .tsx .jsx .java .go .rs .cpp .c .cs .rb .php"
+            )
+
         # Step 2: Build RAG vector index from source files
         analysis_jobs[job_id]["progress"] = 25
         embedder = get_embedding_service()
         await embedder.build_index(code_files, job_id)
+        print("  ✔ Embedding index built")
 
         analysis_jobs[job_id]["progress"] = 30
-        
+
         # Step 2: Analyze with LLM
         llm = LLMService()
+        print(f"  ▶ Calling LLM ({llm.provider}) for codebase analysis...")
         analysis = await llm.analyze_codebase(code_files)
-        
+        print(f"  ✔ Analysis done. Keys: {list(analysis.keys()) if isinstance(analysis, dict) else type(analysis)}")
+
         analysis_jobs[job_id]["progress"] = 70
-        
+
         # Step 3: Generate documentation
+        print("  ▶ Generating documentation...")
         documentation = await llm.generate_documentation(analysis)
-        
+
         analysis_jobs[job_id]["progress"] = 90
-        
+
         # Step 4: Generate diagrams
+        print("  ▶ Generating diagrams...")
         diagrams = await llm.generate_diagrams(analysis)
         
         analysis_jobs[job_id]["progress"] = 100
@@ -100,6 +114,8 @@ async def run_analysis(job_id: str, repo_url: Optional[str], local_path: Optiona
     except Exception as e:
         analysis_jobs[job_id]["status"] = "failed"
         analysis_jobs[job_id]["error"] = str(e)
+        print(f"\n❌ Analysis job {job_id} FAILED:")
+        traceback.print_exc()
 
 
 @router.get("/status/{job_id}")
@@ -143,9 +159,16 @@ async def get_results(job_id: str):
     """Get the full results of a completed analysis"""
     if job_id not in analysis_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     job = analysis_jobs[job_id]
     if job["status"] != "completed":
         raise HTTPException(status_code=400, detail=f"Job status: {job['status']}")
-    
-    return job["results"]
+
+    try:
+        # Explicit serialization so we get a clear error instead of a silent 500
+        serialized = json.dumps(job["results"])
+        return JSONResponse(content=json.loads(serialized))
+    except Exception as e:
+        print(f"\n❌ Results serialization failed for job {job_id}: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Results serialization error: {str(e)}")

@@ -9,6 +9,9 @@ from typing import Dict, List, Optional
 from git import Repo
 from git.exc import GitCommandError
 import asyncio
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class CodeParser:
@@ -42,25 +45,37 @@ class CodeParser:
         'poetry.lock', 'Pipfile.lock', '.DS_Store'
     }
     
-    def __init__(self, repos_dir: str = "./repos"):
+    def __init__(self, repos_dir: str = None):
+        if repos_dir is None:
+            repos_dir = os.getenv("REPOS_DIR", "../cloned_repos")
         self.repos_dir = Path(repos_dir)
         self.repos_dir.mkdir(parents=True, exist_ok=True)
     
     async def clone_and_parse(self, repo_url: str) -> Dict[str, any]:
         """Clone a repository and parse its code files"""
-        # Extract repo name from URL
-        match = re.search(r'/([^/]+?)(?:\.git)?$', repo_url)
-        if not match:
-            raise ValueError(f"Invalid repository URL: {repo_url}")
-        
-        repo_name = match.group(1)
+        # Normalise GitHub URLs — strip /tree/..., /blob/..., etc. so that
+        # git clone always receives a bare https://github.com/owner/repo URL.
+        github_match = re.search(r'github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/.*)?$', repo_url)
+        if github_match:
+            owner = github_match.group(1)
+            repo = github_match.group(2)
+            clone_url = f"https://github.com/{owner}/{repo}.git"
+            repo_name = f"{owner}__{repo}"
+        else:
+            # Non-GitHub URL — use as-is, derive name from last path segment
+            match = re.search(r'/([^/]+?)(?:\.git)?$', repo_url)
+            if not match:
+                raise ValueError(f"Invalid repository URL: {repo_url}")
+            clone_url = repo_url
+            repo_name = match.group(1)
+
         local_path = self.repos_dir / repo_name
-        
+
         # Clone if doesn't exist
         if not local_path.exists():
             try:
                 await asyncio.to_thread(
-                    Repo.clone_from, repo_url, str(local_path)
+                    Repo.clone_from, clone_url, str(local_path)
                 )
             except GitCommandError as e:
                 raise RuntimeError(f"Failed to clone: {e}")

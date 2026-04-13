@@ -407,9 +407,20 @@ Return ONLY valid JSON."""
             except Exception:
                 print(f"Failed to parse JSON: {text[:200]}...")
                 return {
-                    "overview": "Analysis failed to parse",
-                    "purpose": "Raw output: " + text[:500],
-                    "technologies": {"languages": [], "frameworks": []},
+                    "overview": "Analysis completed but response could not be parsed.",
+                    "purpose": text[:500] if text else "No output received from LLM.",
+                    "architecture": {
+                        "pattern": "Unknown",
+                        "components": [],
+                        "description": "Could not extract architecture details.",
+                    },
+                    "technologies": {"languages": [], "frameworks": [], "libraries": []},
+                    "key_files": [],
+                    "entry_points": [],
+                    "dependencies": [],
+                    "strengths": [],
+                    "improvements": ["Try re-analyzing — the LLM response was malformed."],
+                    "complexity": "unknown",
                 }
 
     def _build_code_context(self, code_data: Dict, max_chars: int = 15000) -> str:

@@ -57,6 +57,7 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
         eventSource.onerror = () => {
             setStatus('error')
             eventSource.close()
+            onErrorRef.current?.('Connection to server lost. The analysis may still be running — please wait a moment and refresh.')
         }
 
         return () => eventSource.close()

@@ -47,13 +47,17 @@ function App() {
     const jobId = currentJobId
     try {
       const results = await fetch(`/api/analyze/results/${jobId}`)
+      if (!results.ok) {
+        const errData = await results.json().catch(() => ({}))
+        throw new Error(errData.detail || `Server error ${results.status}`)
+      }
       const data = await results.json()
       setAnalysisData(data)
       setCompletedJobId(jobId)
       // Auto-switch to chat so the user lands right in the conversation
       setActiveTab('chat')
     } catch (err) {
-      setError('Failed to fetch results')
+      setError(err.message || 'Failed to fetch results')
     } finally {
       setIsAnalyzing(false)
       setCurrentJobId(null)

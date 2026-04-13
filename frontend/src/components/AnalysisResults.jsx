@@ -44,6 +44,16 @@ export default function AnalysisResults({ data }) {
             <div className="card">
                 {activeSection === 'overview' && (
                     <div className="space-y-6 animate-fade-in">
+                        {/* Parse failure warning */}
+                        {analysis?.overview === 'Analysis completed but response could not be parsed.' && (
+                            <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-yellow-300 flex items-center gap-3">
+                                <span className="text-xl">⚠️</span>
+                                <div>
+                                    <p className="font-medium">LLM response was malformed</p>
+                                    <p className="text-sm text-yellow-300/70">The model returned invalid JSON. Try re-analyzing — larger repos sometimes cause this.</p>
+                                </div>
+                            </div>
+                        )}
                         {/* Hero section */}
                         <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 rounded-xl p-6 border border-white/10">
                             <h3 className="text-2xl font-bold text-white mb-3">{analysis?.overview || 'Project Overview'}</h3>
