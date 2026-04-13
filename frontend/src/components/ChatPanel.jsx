@@ -1,153 +1,150 @@
 import { useState, useRef, useEffect } from 'react'
 import MarkdownRenderer from './MarkdownRenderer'
 
+const SUGGESTIONS = [
+    'What does this project do?',
+    'Explain the main architecture',
+    'What are the key entry points?',
+    'How can this code be improved?',
+]
+
+function UserAvatar() {
+    return (
+        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[var(--bg-overlay)] border border-[var(--border-default)] flex items-center justify-center">
+            <svg className="w-3.5 h-3.5 text-[var(--text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+            </svg>
+        </div>
+    )
+}
+
+function BotAvatar() {
+    return (
+        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[var(--cyan-dim)] border border-[var(--border-default)] flex items-center justify-center">
+            <svg className="w-3.5 h-3.5 text-[var(--cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+        </div>
+    )
+}
+
 export default function ChatPanel({ context, jobId, onBackToAnalysis }) {
-    const [messages, setMessages] = useState([])
-    const [input, setInput] = useState('')
-    const [isLoading, setIsLoading] = useState(false)
-    const [streamingMessage, setStreamingMessage] = useState('')
-    const messagesEndRef = useRef(null)
-    const inputRef = useRef(null)
+    const [messages,  setMessages]  = useState([])
+    const [input,     setInput]     = useState('')
+    const [loading,   setLoading]   = useState(false)
+    const [streaming, setStreaming] = useState('')
+    const bottomRef  = useRef(null)
+    const inputRef   = useRef(null)
 
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
+    useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, streaming])
 
-    useEffect(() => {
-        scrollToBottom()
-    }, [messages, streamingMessage])
+    const send = async (text) => {
+        const msg = text.trim()
+        if (!msg || loading) return
 
-    const handleSubmit = async (e) => {
-        e.preventDefault()
-        if (!input.trim() || isLoading) return
-
-        const userMessage = input.trim()
         setInput('')
-        setIsLoading(true)
-        setStreamingMessage('')
-
-        // Add user message
-        setMessages(prev => [...prev, { role: 'user', content: userMessage }])
+        setLoading(true)
+        setStreaming('')
+        setMessages(p => [...p, { role: 'user', content: msg }])
 
         try {
-            const response = await fetch('/api/chat/stream', {
+            const res = await fetch('/api/chat/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: userMessage,
-                    history: messages,
-                    context: context?.analysis,
-                    job_id: jobId
-                })
+                body: JSON.stringify({ message: msg, history: messages, context: context?.analysis, job_id: jobId }),
             })
+            if (!res.ok) throw new Error('Chat request failed')
 
-            if (!response.ok) throw new Error('Chat request failed')
-
-            const reader = response.body.getReader()
+            const reader  = res.body.getReader()
             const decoder = new TextDecoder()
-            let fullResponse = ''
-
+            let full = ''
             while (true) {
                 const { done, value } = await reader.read()
                 if (done) break
-
-                const chunk = decoder.decode(value, { stream: true })
-                fullResponse += chunk
-                setStreamingMessage(fullResponse)
+                full += decoder.decode(value, { stream: true })
+                setStreaming(full)
             }
-
-            // Add assistant message
-            setMessages(prev => [...prev, { role: 'assistant', content: fullResponse }])
-            setStreamingMessage('')
-
-        } catch (error) {
-            setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: '❌ Sorry, I encountered an error. Please try again.',
-                isError: true
-            }])
+            setMessages(p => [...p, { role: 'assistant', content: full }])
+            setStreaming('')
+        } catch {
+            setMessages(p => [...p, { role: 'assistant', content: '❌ Something went wrong. Please try again.', isError: true }])
         } finally {
-            setIsLoading(false)
+            setLoading(false)
             inputRef.current?.focus()
         }
     }
 
-    const suggestedQuestions = [
-        "What does this project do?",
-        "Explain the architecture",
-        "What are the main components?",
-        "How can I improve this code?",
-    ]
+    const handleSubmit = (e) => { e.preventDefault(); send(input) }
 
-    // No analysis yet — show a blocker with a back button
+    /* ── No analysis yet ─────────────────────────────────── */
     if (!context || !jobId) {
         return (
-            <div className="card flex flex-col items-center justify-center py-20 text-center animate-fade-in">
-                <span className="text-5xl mb-4">🔍</span>
-                <h2 className="text-xl font-semibold text-white mb-2">No codebase analyzed yet</h2>
-                <p className="text-white/50 mb-6 max-w-sm">
-                    Analyze a GitHub repository first. The chat will use RAG to search the actual source code when answering your questions.
+            <div className="card neon-border flex flex-col items-center justify-center py-20 text-center animate-fade-in">
+                <div className="w-14 h-14 rounded-2xl bg-[var(--bg-elevated)] neon-border flex items-center justify-center mb-4">
+                    <svg className="w-7 h-7 text-[var(--text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.6">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                    </svg>
+                </div>
+                <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">No codebase analyzed yet</h2>
+                <p className="text-sm text-[var(--text-muted)] max-w-xs mb-6">
+                    Analyze a GitHub repo first. The chat uses RAG to search actual source files for every answer.
                 </p>
-                <button
-                    onClick={onBackToAnalysis}
-                    className="px-6 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium hover:opacity-90 transition-opacity"
-                >
+                <button onClick={onBackToAnalysis} className="btn-primary">
                     ← Go to Analyze
                 </button>
             </div>
         )
     }
 
+    /* ── Chat UI ─────────────────────────────────────────── */
     return (
-        <div className="card h-[calc(100vh-250px)] flex flex-col animate-fade-in">
+        <div className="card neon-border flex flex-col animate-fade-in" style={{ height: 'calc(100vh - 220px)', minHeight: '520px' }}>
+
             {/* Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-white/10">
+            <div className="flex items-center justify-between pb-3.5 mb-3.5 border-b border-[var(--border-subtle)]">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-                        <span className="text-lg">🤖</span>
-                    </div>
+                    <BotAvatar/>
                     <div>
-                        <h2 className="text-lg font-semibold text-white">Code Assistant</h2>
-                        <p className="text-sm text-white/50">
-                            RAG-powered — searches actual source code for every answer
-                        </p>
+                        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Code Assistant</h2>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>
+                            <span className="text-[0.7rem] font-mono text-[var(--text-muted)]">RAG · source search active</span>
+                        </div>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                     {messages.length > 0 && (
-                        <button
-                            onClick={() => setMessages([])}
-                            className="text-sm text-white/50 hover:text-white transition-colors px-3 py-1 hover:bg-white/10 rounded-lg"
-                        >
-                            Clear chat
+                        <button onClick={() => setMessages([])} className="btn-ghost text-xs">
+                            Clear
                         </button>
                     )}
-                    <button
-                        onClick={onBackToAnalysis}
-                        className="text-sm text-white/50 hover:text-white transition-colors px-3 py-1 hover:bg-white/10 rounded-lg"
-                    >
+                    <button onClick={onBackToAnalysis} className="btn-ghost text-xs">
                         ← Analysis
                     </button>
                 </div>
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto py-4 space-y-4">
-                {messages.length === 0 && !streamingMessage && (
-                    <div className="flex flex-col items-center justify-center h-full text-center">
-                        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center mb-4">
-                            <span className="text-4xl">💬</span>
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+
+                {/* Empty state */}
+                {messages.length === 0 && !streaming && (
+                    <div className="flex flex-col items-center justify-center h-full text-center py-8 animate-fade-in">
+                        <div className="w-14 h-14 rounded-2xl bg-[var(--cyan-dim)] neon-border flex items-center justify-center mb-4">
+                            <svg className="w-7 h-7 text-[var(--cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.6">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                            </svg>
                         </div>
-                        <h3 className="text-xl font-semibold text-white mb-2">Start a Conversation</h3>
-                        <p className="text-white/50 mb-6 max-w-md">
-                            Ask me anything about the codebase. I can explain architecture, components, or help you understand the code.
+                        <h3 className="text-base font-semibold text-[var(--text-primary)] mb-1">Ask anything about the codebase</h3>
+                        <p className="text-sm text-[var(--text-muted)] mb-6 max-w-sm">
+                            I search the actual source files using RAG to give precise, referenced answers.
                         </p>
-                        <div className="flex flex-wrap gap-2 justify-center max-w-lg">
-                            {suggestedQuestions.map((q, i) => (
+                        <div className="flex flex-wrap gap-2 justify-center max-w-md">
+                            {SUGGESTIONS.map((q, i) => (
                                 <button
                                     key={i}
-                                    onClick={() => setInput(q)}
-                                    className="px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm text-white/70 hover:text-white transition-all"
+                                    onClick={() => send(q)}
+                                    className="px-3.5 py-2 rounded-lg text-xs font-medium neon-border bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--cyan)] hover:bg-[var(--cyan-dim)] hover:border-[var(--border-accent)] transition-all"
                                 >
                                     {q}
                                 </button>
@@ -156,94 +153,85 @@ export default function ChatPanel({ context, jobId, onBackToAnalysis }) {
                     </div>
                 )}
 
+                {/* Message list */}
                 {messages.map((msg, i) => (
-                    <div
-                        key={i}
-                        className={`flex gap-3 animate-fade-in ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                    >
-                        {msg.role === 'assistant' && (
-                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex-shrink-0 flex items-center justify-center">
-                                <span>🤖</span>
-                            </div>
-                        )}
-                        <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${msg.role === 'user'
-                                ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white'
+                    <div key={i} className={`flex gap-2.5 animate-fade ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        {msg.role === 'assistant' && <BotAvatar/>}
+                        <div className={`max-w-[78%] rounded-xl px-4 py-3 text-sm ${
+                            msg.role === 'user'
+                                ? 'text-white'
                                 : msg.isError
-                                    ? 'bg-red-500/20 border border-red-500/30 text-red-300'
-                                    : 'bg-white/5 border border-white/10'
-                            }`}>
+                                    ? 'bg-red-500/10 border border-red-500/20 text-red-300'
+                                    : 'bg-[var(--bg-elevated)] neon-border text-[var(--text-primary)]'
+                        }`}
+                        style={msg.role === 'user' ? {
+                            background: 'linear-gradient(135deg, #0ea5e9, #6366f1)',
+                            border: '1px solid rgba(0,212,255,0.2)',
+                        } : {}}>
                             {msg.role === 'assistant' ? (
-                                <div className="text-white/90 prose-sm">
-                                    <MarkdownRenderer content={msg.content} />
-                                </div>
+                                <MarkdownRenderer content={msg.content}/>
                             ) : (
-                                <p>{msg.content}</p>
+                                <p className="leading-relaxed">{msg.content}</p>
                             )}
                         </div>
-                        {msg.role === 'user' && (
-                            <div className="w-8 h-8 rounded-full bg-white/20 flex-shrink-0 flex items-center justify-center">
-                                <span>👤</span>
-                            </div>
-                        )}
+                        {msg.role === 'user' && <UserAvatar/>}
                     </div>
                 ))}
 
-                {/* Streaming message */}
-                {streamingMessage && (
-                    <div className="flex gap-3 animate-fade-in">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex-shrink-0 flex items-center justify-center">
-                            <span>🤖</span>
-                        </div>
-                        <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white/5 border border-white/10">
-                            <div className="text-white/90">
-                                <MarkdownRenderer content={streamingMessage} />
-                            </div>
+                {/* Streaming response */}
+                {streaming && (
+                    <div className="flex gap-2.5 animate-fade">
+                        <BotAvatar/>
+                        <div className="max-w-[78%] rounded-xl px-4 py-3 bg-[var(--bg-elevated)] neon-border text-sm text-[var(--text-primary)]">
+                            <MarkdownRenderer content={streaming}/>
                         </div>
                     </div>
                 )}
 
                 {/* Typing indicator */}
-                {isLoading && !streamingMessage && (
-                    <div className="flex gap-3">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex-shrink-0 flex items-center justify-center">
-                            <span>🤖</span>
-                        </div>
-                        <div className="bg-white/5 border border-white/10 rounded-2xl px-4 py-3">
-                            <div className="flex gap-1">
-                                <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                                <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                                <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                {loading && !streaming && (
+                    <div className="flex gap-2.5 animate-fade">
+                        <BotAvatar/>
+                        <div className="rounded-xl px-4 py-3 bg-[var(--bg-elevated)] neon-border">
+                            <div className="flex gap-1.5 items-center h-4">
+                                {[0,150,300].map(d => (
+                                    <span key={d} className="w-1.5 h-1.5 rounded-full bg-[var(--cyan)] animate-bounce" style={{ animationDelay: `${d}ms`}}/>
+                                ))}
                             </div>
                         </div>
                     </div>
                 )}
 
-                <div ref={messagesEndRef} />
+                <div ref={bottomRef}/>
             </div>
 
             {/* Input */}
-            <form onSubmit={handleSubmit} className="pt-4 border-t border-white/10">
-                <div className="flex gap-3">
-                    <input
-                        ref={inputRef}
-                        type="text"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        placeholder="Ask about the codebase..."
-                        className="input flex-1"
-                        disabled={isLoading}
-                    />
-                    <button
-                        type="submit"
-                        disabled={!input.trim() || isLoading}
-                        className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                        <span>Send</span>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            <form onSubmit={handleSubmit} className="pt-3.5 mt-3.5 border-t border-[var(--border-subtle)] flex gap-2.5">
+                <input
+                    ref={inputRef}
+                    type="text"
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    placeholder="Ask about the codebase…"
+                    className="input flex-1 text-sm"
+                    disabled={loading}
+                />
+                <button
+                    type="submit"
+                    disabled={!input.trim() || loading}
+                    className="btn-primary px-4"
+                >
+                    {loading ? (
+                        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"/>
+                            <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                         </svg>
-                    </button>
-                </div>
+                    ) : (
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                        </svg>
+                    )}
+                </button>
             </form>
         </div>
     )

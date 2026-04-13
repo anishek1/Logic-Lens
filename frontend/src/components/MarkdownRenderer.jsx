@@ -29,7 +29,7 @@ export default function MarkdownRenderer({ content }) {
     }
 
     return (
-        <div className="prose prose-invert prose-lg max-w-none">
+        <div className="prose-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
