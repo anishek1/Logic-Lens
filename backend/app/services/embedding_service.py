@@ -17,10 +17,10 @@ _client = None
 _embed_fn = None
 
 
-def _get_client() -> chromadb.PersistentClient:
+def _get_client():
     global _client
     if _client is None:
-        _client = chromadb.PersistentClient(path="./chroma_db")
+        _client = chromadb.EphemeralClient()
     return _client
 
 

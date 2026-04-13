@@ -40,3 +40,4 @@ output/
 OllamaSetup.exe
 .claude/
 CLAUDE.md
+.agent/

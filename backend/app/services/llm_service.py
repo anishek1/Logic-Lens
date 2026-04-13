@@ -7,9 +7,20 @@ from typing import Dict, List, Optional, AsyncGenerator
 from dotenv import load_dotenv
 import httpx
 
+import re
+
 load_dotenv()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def _fix_mermaid(diagram: str) -> str:
+    """Fix common LLM-generated Mermaid syntax errors."""
+    if not isinstance(diagram, str):
+        return diagram
+    # Remove trailing > after edge label closing pipe: -->|label|> → -->|label|
+    diagram = re.sub(r'(\|[^|]*)\|>', r'\1|', diagram)
+    return diagram
 
 
 class LLMService:
@@ -126,13 +137,16 @@ Generate THREE diagrams as JSON:
     "architecture": "mermaid code for high-level architecture"
 }}
 
-Use valid Mermaid syntax. Example:
-```
-classDiagram
-    class ClassName {{
-        +method()
-    }}
-```
+STRICT Mermaid syntax rules:
+- Edge labels use -->|label| not -->|label|>
+- flowchart TB or graph TB (not LR unless needed)
+- No trailing > after closing pipe in edge labels
+- Node IDs must be alphanumeric with no spaces
+
+Example of CORRECT syntax:
+graph TB
+    A[Component] -->|uses| B[Service]
+    B -->|calls| C[Database]
 
 Return ONLY valid JSON."""
 
@@ -141,12 +155,10 @@ Return ONLY valid JSON."""
         response = await self._generate(prompt, json_mode=use_json_mode)
 
         if self.provider == "ollama" and isinstance(response, str):
-            try:
-                with open("debug_ollama_diagrams.txt", "w", encoding="utf-8") as f:
-                    f.write(response)
-            except Exception:
-                pass
             return self._extract_mermaid(response)
+
+        if isinstance(response, dict):
+            return {k: _fix_mermaid(v) for k, v in response.items()}
 
         return response
 
