@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Claude Code internals
+.claude/
+.agent/
+CLAUDE.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/.vite/
+
+# Cloned repos and output (can be huge)
+cloned_repos/
+backend/repos/
+backend/output/
+output/
+
+# Local env (secrets must never go into image)
+backend/.env
+.env
+
+# Logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Existing build output (will be rebuilt inside Docker)
+frontend/dist/
