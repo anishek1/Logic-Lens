@@ -28,11 +28,15 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Repos (cloned for analysis)
+# Repos (cloned for analysis — can be huge)
 repos/
+cloned_repos/
 
 # Output files
 output/
+
+# ChromaDB local data
+chroma_db/
 
 # Installers and Executables
 *.exe
