@@ -1,6 +1,7 @@
 """
 LLM Service - Interface for code analysis (Gemini, Groq & Ollama supported)
 """
+import asyncio
 import os
 import json
 from typing import Dict, List, Optional, AsyncGenerator
@@ -256,19 +257,28 @@ Return ONLY valid JSON."""
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                GROQ_API_URL,
-                headers={
-                    "Authorization": f"Bearer {self.groq_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+        for attempt in range(5):
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    GROQ_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {self.groq_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+
+            if response.status_code == 429:
+                wait = int(response.headers.get("retry-after", 2 ** (attempt + 1)))
+                print(f"  ⏳ Groq rate limit hit — retrying in {wait}s (attempt {attempt + 1}/5)")
+                await asyncio.sleep(wait)
+                continue
+
             response.raise_for_status()
             text = response.json()["choices"][0]["message"]["content"]
+            return self._parse_json(text) if json_mode else text
 
-        return self._parse_json(text) if json_mode else text
+        raise RuntimeError("Groq rate limit: all 5 retry attempts exhausted.")
 
     async def _groq_stream(self, messages: List[Dict]) -> AsyncGenerator[str, None]:
         async with httpx.AsyncClient(timeout=None) as client:
