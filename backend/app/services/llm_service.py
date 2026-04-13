@@ -13,6 +13,7 @@ import re
 load_dotenv()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+NIM_API_URL  = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 
 def _fix_mermaid(diagram: str) -> str:
@@ -33,6 +34,12 @@ class LLMService:
         self.ollama_model = os.getenv("OLLAMA_MODEL", "mistral")
         self.groq_api_key = os.getenv("GROQ_API_KEY")
         self.groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        self.nim_api_key = os.getenv("NIM_API_KEY")
+        self.nim_model = os.getenv("NIM_MODEL", "meta/llama-3.3-70b-instruct")
+
+        if self.provider == "nim" and not self.nim_api_key:
+            print("⚠️  NIM_API_KEY not found. Falling back to Groq.")
+            self.provider = "groq"
 
         if self.provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
@@ -55,7 +62,7 @@ class LLMService:
     async def analyze_codebase(self, code_data: Dict) -> Dict:
         """Analyze a codebase and return structured insights"""
         code_context = self._build_code_context(code_data)
-        structure_limit = 800 if self.provider == "groq" else 2000
+        structure_limit = 800 if self.provider in ("groq", "nim") else 2000
 
         prompt = f"""Analyze this codebase and provide a comprehensive analysis.
 
@@ -178,7 +185,7 @@ Return ONLY valid JSON."""
         system_msg = self._build_system_prompt(context, retrieved_chunks)
         messages = self._build_messages(system_msg, history, message)
 
-        if self.provider == "groq":
+        if self.provider in ("groq", "nim"):
             async for chunk in self._groq_stream(messages):
                 yield chunk
         elif self.provider == "ollama":
@@ -239,6 +246,8 @@ Return ONLY valid JSON."""
     async def _generate(self, prompt: str, json_mode: bool = False):
         if self.provider == "groq":
             return await self._generate_groq(prompt, json_mode)
+        elif self.provider == "nim":
+            return await self._generate_nim(prompt, json_mode)
         elif self.provider == "ollama":
             return await self._generate_ollama(prompt, json_mode)
         else:
@@ -280,18 +289,48 @@ Return ONLY valid JSON."""
 
         raise RuntimeError("Groq rate limit: all 5 retry attempts exhausted.")
 
+    async def _generate_nim(self, prompt: str, json_mode: bool):
+        """NVIDIA NIM API — OpenAI-compatible, same structure as Groq."""
+        payload: Dict = {
+            "model": self.nim_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 4096,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                NIM_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self.nim_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            text = response.json()["choices"][0]["message"]["content"]
+
+        return self._parse_json(text) if json_mode else text
+
     async def _groq_stream(self, messages: List[Dict]) -> AsyncGenerator[str, None]:
+        # Shared by both groq and nim providers (both are OpenAI-compatible)
+        api_url = NIM_API_URL if self.provider == "nim" else GROQ_API_URL
+        api_key = self.nim_api_key if self.provider == "nim" else self.groq_api_key
+        model   = self.nim_model  if self.provider == "nim" else self.groq_model
+
         async with httpx.AsyncClient(timeout=None) as client:
             try:
                 async with client.stream(
                     "POST",
-                    GROQ_API_URL,
+                    api_url,
                     headers={
-                        "Authorization": f"Bearer {self.groq_api_key}",
+                        "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": self.groq_model,
+                        "model": model,
                         "messages": messages,
                         "stream": True,
                         "temperature": 0.3,
@@ -443,6 +482,9 @@ Return ONLY valid JSON."""
             max_chars = 12000
             max_file_chars = 2000
         elif self.provider == "groq":
+            max_chars = 20000
+            max_file_chars = 1500
+        elif self.provider == "nim":
             max_chars = 20000
             max_file_chars = 1500
         else:  # gemini
