@@ -2,12 +2,20 @@
 Embedding Service - Build and query a vector index for RAG
 Uses ChromaDB's built-in DefaultEmbeddingFunction (onnxruntime, ~23 MB ONNX model).
 No PyTorch / sentence-transformers required.
+
+Set ENABLE_RAG=false to skip embeddings entirely (saves ~300 MB RAM — useful on
+memory-constrained deployments like Railway's free tier). Chat falls back to
+context stuffing when RAG is disabled.
 """
 import asyncio
+import os
 from typing import Dict, List
 
-import chromadb
-from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+_RAG_ENABLED = os.getenv("ENABLE_RAG", "true").lower() not in ("false", "0", "no")
+
+if _RAG_ENABLED:
+    import chromadb
+    from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 _CHUNK_LINES = 60
 _CHUNK_OVERLAP = 10
@@ -24,7 +32,7 @@ def _get_client():
     return _client
 
 
-def _get_embed_fn() -> DefaultEmbeddingFunction:
+def _get_embed_fn() -> "DefaultEmbeddingFunction":
     global _embed_fn
     if _embed_fn is None:
         # Downloads all-MiniLM-L6-v2 as ONNX (~23 MB) on first call, then cached
@@ -47,7 +55,11 @@ class EmbeddingService:
         """
         Chunk every source file, embed with ChromaDB's built-in function,
         and persist to ./chroma_db/ keyed by job_id.
+        No-op when ENABLE_RAG=false.
         """
+        if not _RAG_ENABLED:
+            return
+
         collection_name = _safe_name(job_id)
         client = _get_client()
         embed_fn = _get_embed_fn()
@@ -90,8 +102,11 @@ class EmbeddingService:
     async def retrieve(self, query: str, job_id: str, top_k: int = 5) -> List[Dict]:
         """
         Return top_k most semantically similar code chunks for query.
-        Returns [] if no index exists for this job_id.
+        Returns [] if no index exists for this job_id or RAG is disabled.
         """
+        if not _RAG_ENABLED:
+            return []
+
         collection_name = _safe_name(job_id)
         client = _get_client()
         embed_fn = _get_embed_fn()
