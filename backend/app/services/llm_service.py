@@ -300,15 +300,13 @@ Return ONLY valid JSON."""
             api_key=self.nim_api_key,
         )
 
+        # Thinking disabled for analysis — structured JSON calls don't need deep reasoning
+        # and the reasoning model adds 60-90s per call making analysis unbearably slow
         kwargs: Dict = {
             "model": self.nim_model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": 16384,
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": True},
-                "reasoning_budget": 16384,
-            },
+            "max_tokens": 4096,
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
