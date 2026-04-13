@@ -32,8 +32,8 @@ allowed_origins = os.getenv(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # tighten to allowed_origins once you have a custom domain
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,    # must be False when allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )

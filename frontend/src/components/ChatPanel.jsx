@@ -48,7 +48,7 @@ export default function ChatPanel({ context, jobId, onBackToAnalysis }) {
         setMessages(p => [...p, { role: 'user', content: msg }])
 
         try {
-            const res = await fetch('/api/chat/stream', {
+            const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/chat/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: msg, history: messages, context: context?.analysis, job_id: jobId }),

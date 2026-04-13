@@ -26,7 +26,7 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
 
     useEffect(() => {
         if (!jobId) return
-        const es = new EventSource(`/api/analyze/stream/${jobId}`)
+        const es = new EventSource(`${import.meta.env.VITE_API_URL || ''}/api/analyze/stream/${jobId}`)
 
         es.onmessage = (e) => {
             try {

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import API_BASE from './config'
 import Header from './components/Header'
 import RepoInput from './components/RepoInput'
 import AnalysisResults from './components/AnalysisResults'
@@ -24,7 +25,7 @@ function App() {
         setActiveTab('analyze')
 
         try {
-            const res  = await fetch('/api/analyze/', {
+            const res  = await fetch(`${API_BASE}/api/analyze/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ repo_url: repoUrl }),
@@ -44,7 +45,7 @@ function App() {
     const handleAnalysisComplete = async () => {
         const jobId = currentJobId
         try {
-            const res = await fetch(`/api/analyze/results/${jobId}`)
+            const res = await fetch(`${API_BASE}/api/analyze/results/${jobId}`)
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}))
                 throw new Error(err.detail || `Server error ${res.status}`)
