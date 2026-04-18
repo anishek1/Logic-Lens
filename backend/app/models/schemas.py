@@ -1,7 +1,7 @@
 """
 Pydantic Schemas for API requests and responses
 """
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from enum import Enum
 

@@ -6,5 +6,9 @@ pydantic>=2.0.0
 aiofiles>=23.0.0
 httpx>=0.26.0
 openai>=1.0.0
-# RAG — chromadb bundles onnxruntime + all-MiniLM-L6-v2 ONNX (~23 MB), no PyTorch needed
+# RAG — ChromaDB vector store + fastembed (ONNX runtime) for bi-encoder
+# embedding and cross-encoder rerank. No PyTorch, ~200 MB install, 2-3x
+# faster on CPU than sentence-transformers. First run downloads ~220 MB
+# of ONNX models into the fastembed cache.
 chromadb>=0.4.0
+fastembed>=0.3.0

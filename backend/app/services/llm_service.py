@@ -2,6 +2,7 @@
 LLM Service - Interface for code analysis (Gemini, Groq & Ollama supported)
 """
 import asyncio
+import logging
 import os
 import json
 from typing import Dict, List, Optional, AsyncGenerator
@@ -12,6 +13,8 @@ import re
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
@@ -21,6 +24,14 @@ def _fix_mermaid(diagram: str) -> str:
         return diagram
     # Remove trailing > after edge label closing pipe: -->|label|> → -->|label|
     diagram = re.sub(r'(\|[^|]*)\|>', r'\1|', diagram)
+    # Edges to 'subgraph X' are invalid — the subgraph label is not a node.
+    # Strip the broken edge so at least the rest of the diagram renders.
+    diagram = re.sub(
+        r'^[ \t]*[A-Za-z0-9_]+[ \t]*(?:-{1,3}>|--[|>]?)[^\n]*?subgraph[ \t]+[A-Za-z0-9_ ]+\n',
+        '',
+        diagram,
+        flags=re.MULTILINE,
+    )
     return diagram
 
 
@@ -34,16 +45,16 @@ class LLMService:
         self.groq_api_key = os.getenv("GROQ_API_KEY")
         self.groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         self.nim_api_key = os.getenv("NIM_API_KEY")
-        self.nim_model = os.getenv("NIM_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+        self.nim_model = os.getenv("NIM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
 
         if self.provider == "nim" and not self.nim_api_key:
-            print("⚠️  NIM_API_KEY not found. Falling back to Groq.")
+            logger.warning("NIM_API_KEY not found. Falling back to Groq.")
             self.provider = "groq"
 
         if self.provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
-                print("⚠️  GEMINI_API_KEY not found. Falling back to Groq.")
+                logger.warning("GEMINI_API_KEY not found. Falling back to Groq.")
                 self.provider = "groq"
             else:
                 import google.generativeai as genai
@@ -51,7 +62,7 @@ class LLMService:
                 self.model = genai.GenerativeModel("gemini-pro")
 
         if self.provider == "groq" and not self.groq_api_key:
-            print("⚠️  GROQ_API_KEY not found. Falling back to Ollama.")
+            logger.warning("GROQ_API_KEY not found. Falling back to Ollama.")
             self.provider = "ollama"
 
     # ------------------------------------------------------------------
@@ -59,115 +70,290 @@ class LLMService:
     # ------------------------------------------------------------------
 
     async def analyze_codebase(self, code_data: Dict) -> Dict:
-        """Analyze a codebase and return structured insights"""
+        """
+        Analyze a codebase and return structured insights.
+
+        Runs four focused LLM calls in parallel (overview, architecture, files,
+        insights) instead of one giant call. Each sub-call gets the full code
+        context but a narrower task, so each section is dramatically deeper
+        than a single combined call could produce. Results are merged into the
+        schema the frontend expects.
+        """
         code_context = self._build_code_context(code_data)
-        structure_limit = 800 if self.provider in ("groq", "nim") else 2000
+        structure_limit = 1500 if self.provider in ("groq", "nim") else 3000
+        structure = code_data["structure"][:structure_limit]
+        meta = (
+            f"## Codebase Information\n"
+            f"- Files: {code_data['file_count']}\n"
+            f"- Languages: {', '.join(code_data['languages'])}\n"
+            f"- Total Lines: {code_data['total_lines']}\n\n"
+            f"## Directory Structure\n```\n{structure}\n```\n\n"
+            f"## Code Samples\n{code_context}\n"
+        )
 
-        prompt = f"""Analyze this codebase and provide a comprehensive analysis.
+        tasks = [
+            self._analyze_overview(meta),
+            self._analyze_architecture(meta),
+            self._analyze_files(meta),
+            self._analyze_insights(meta),
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-## Codebase Information
-- **Files:** {code_data['file_count']}
-- **Languages:** {', '.join(code_data['languages'])}
-- **Total Lines:** {code_data['total_lines']}
+        merged: Dict = {}
+        for result in results:
+            if isinstance(result, Exception):
+                logger.exception("Analysis sub-call failed: %s", result)
+                continue
+            merged.update(result)
 
-## Directory Structure
-```
-{code_data['structure'][:structure_limit]}
-```
+        # Guarantee every schema field exists so AnalysisResponse doesn't 500
+        merged.setdefault("overview", "Analysis partially failed.")
+        merged.setdefault("purpose", "")
+        merged.setdefault("architecture", {"pattern": "Unknown", "components": [], "description": ""})
+        merged.setdefault("technologies", {"languages": [], "frameworks": [], "libraries": []})
+        merged.setdefault("key_files", [])
+        merged.setdefault("entry_points", [])
+        merged.setdefault("dependencies", [])
+        merged.setdefault("strengths", [])
+        merged.setdefault("improvements", [])
+        merged.setdefault("complexity", "unknown")
+        return merged
 
-## Code Samples
-{code_context}
+    async def _analyze_overview(self, meta: str) -> Dict:
+        """Overview, purpose, technologies, complexity — the 'what is this' pass."""
+        prompt = f"""{meta}
 
-## Required Analysis
+You are a senior engineer writing the executive summary of this codebase for a technical reader.
 
-Provide your analysis as JSON with this structure:
+Return JSON with EXACTLY these keys:
 {{
-    "overview": "Brief project description",
-    "purpose": "What this project does",
-    "architecture": {{
-        "pattern": "e.g., MVC, Microservices, Monolith",
-        "components": ["list of main components"],
-        "description": "How components interact"
-    }},
+    "overview": "150-250 words: what domain this is in, what problem it solves, who the intended user is, and the defining technical approach. Reference specific files or features as evidence. No marketing language.",
+    "purpose": "80-150 words: the concrete user-facing capability — what can a person DO with this app/library? Describe the core workflow step by step.",
     "technologies": {{
-        "languages": ["list"],
-        "frameworks": ["list"],
-        "libraries": ["notable libraries"]
+        "languages": ["every language used, primary first"],
+        "frameworks": ["every framework, with version if visible in manifests, e.g. 'FastAPI 0.109', 'React 19'"],
+        "libraries": ["notable libraries and what each is used for, e.g. 'ChromaDB — vector index for RAG', 'sentence-transformers — embedding + rerank'. Include at least 6 if the project uses them."]
     }},
-    "key_files": [
-        {{"path": "file.py", "purpose": "what it does"}}
-    ],
-    "entry_points": ["main entry points"],
-    "dependencies": ["external dependencies"],
-    "strengths": ["list"],
-    "improvements": ["suggested improvements"],
-    "complexity": "low/medium/high"
+    "complexity": "low | medium | high — with a one-sentence justification inline, e.g. 'medium — single-service backend + SPA frontend, no distributed systems'"
 }}
 
-Return ONLY valid JSON, no markdown or explanations."""
+Be concrete. Cite file paths. Return ONLY valid JSON."""
+        result = await self._generate(prompt, json_mode=True)
+        return result if isinstance(result, dict) else {}
 
-        return await self._generate(prompt, json_mode=True)
+    async def _analyze_architecture(self, meta: str) -> Dict:
+        """Architecture pattern, components, and how they interact."""
+        prompt = f"""{meta}
+
+You are a senior architect documenting this codebase for a new engineer who must make changes to it next week.
+
+Return JSON with EXACTLY this shape:
+{{
+    "architecture": {{
+        "pattern": "the dominant architectural pattern — be specific, e.g. 'Layered backend (routes → services → models) + SPA frontend via REST/SSE', not just 'MVC'",
+        "components": [
+            "at least 6 entries. Each entry is 'ComponentName — one-sentence responsibility and the file(s) that implement it'. Example: 'EmbeddingService — chunks source files and builds ChromaDB indexes per analysis job (backend/app/services/embedding_service.py)'"
+        ],
+        "description": "300-500 words covering, in this order: (1) layering — what each layer's job is, (2) request lifecycle — how an HTTP request flows from the browser to the LLM and back, (3) data flow — where code chunks, embeddings, and LLM outputs live at each stage, (4) cross-cutting concerns like streaming, background tasks, state management. Cite specific functions and files throughout. Be concrete, not generic."
+    }}
+}}
+
+Return ONLY valid JSON."""
+        result = await self._generate(prompt, json_mode=True)
+        return result if isinstance(result, dict) else {}
+
+    async def _analyze_files(self, meta: str) -> Dict:
+        """Key files, entry points, dependencies."""
+        prompt = f"""{meta}
+
+You are orienting a new engineer. Which files matter, how do you run this, and what does it depend on?
+
+Return JSON with EXACTLY these keys:
+{{
+    "key_files": [
+        {{"path": "exact/relative/path.py", "purpose": "one sentence explaining what this file does AND why a new engineer would need to read it — e.g. 'holds the provider dispatch logic that determines whether Groq, NIM, Gemini, or Ollama handles each call'"}}
+    ],
+    "entry_points": [
+        "each entry is a concrete way to run the project, including the command. Example: 'Backend API — `python -m uvicorn app.main:app --reload --port 8000` from backend/'. Cover dev, prod, and CLI entry points if they exist."
+    ],
+    "dependencies": [
+        "external dependencies grouped logically. Example: 'Runtime: fastapi, uvicorn, chromadb, sentence-transformers'. Include dev/test deps separately. Pull from requirements.txt, package.json, etc."
+    ]
+}}
+
+Requirements: at least 8 key_files (more if the project is non-trivial). Cite exact paths. Return ONLY valid JSON."""
+        result = await self._generate(prompt, json_mode=True)
+        return result if isinstance(result, dict) else {}
+
+    async def _analyze_insights(self, meta: str) -> Dict:
+        """Strengths and improvements — the critical read."""
+        prompt = f"""{meta}
+
+You are doing a critical code review. Be honest and specific — no generic platitudes.
+
+Return JSON with EXACTLY these keys:
+{{
+    "strengths": [
+        "at least 6 entries. Each one cites a SPECIFIC file or pattern as evidence. Bad: 'Good separation of concerns'. Good: 'Clean provider abstraction in llm_service.py — each LLM backend (Groq, NIM, Gemini, Ollama) has isolated _generate_* and _*_stream methods with a single dispatch point'."
+    ],
+    "improvements": [
+        "at least 6 entries. Each is an actionable improvement with the file/pattern it applies to and the reason. Bad: 'Add tests'. Good: 'No tests for the RAG retrieval pipeline — embedding_service.retrieve() has fallback paths (reranker failure, empty collection) that are untested and could silently regress'."
+    ]
+}}
+
+Requirements: every item must name a specific file, function, or pattern. No generic advice. Return ONLY valid JSON."""
+        result = await self._generate(prompt, json_mode=True)
+        return result if isinstance(result, dict) else {}
 
     async def generate_documentation(self, analysis: Dict) -> str:
-        """Generate documentation from analysis"""
-        prompt = f"""Based on this code analysis, generate comprehensive documentation in Markdown format.
+        """Generate comprehensive Markdown documentation from the analysis."""
+        prompt = f"""You are writing the README for a technical project. Produce professional, detailed, developer-facing documentation in Markdown.
 
-Analysis:
+## Source Analysis
 {json.dumps(analysis, indent=2)}
 
-Generate documentation with these sections:
-1. # Project Name (infer from analysis)
-2. ## Overview
-3. ## Features
-4. ## Architecture
-5. ## Getting Started
-6. ## Project Structure
-7. ## Key Components
-8. ## Technologies Used
-9. ## Contributing
+## Required Structure (include every section)
 
-Make it professional and developer-friendly."""
+# <Project Name inferred from analysis>
+
+## Overview
+200+ words. What the project does, who uses it, what makes it noteworthy. Opening line should hook a technical reader.
+
+## Features
+A bulleted list of 6-10 concrete features. Each bullet is one sentence naming the capability and the component that delivers it.
+
+## Architecture
+300+ words with at least one subsection. Describe layering, request flow, data flow. Use file paths as evidence. Where appropriate, include a small ASCII diagram or a Mermaid block inside a ```mermaid fence.
+
+## Getting Started
+Full setup instructions. Show the actual commands (not placeholders). Cover prerequisites, installation, env configuration, and how to run dev servers for every service in the project.
+
+## Project Structure
+A tree view (```) showing top-level directories and key files, with one-line descriptions beside important entries.
+
+## Key Components
+For each of the 5-10 most important components/files listed in the analysis, give a short section (one heading + 2-4 sentence paragraph) covering its responsibility, its inputs/outputs, and how it interacts with other components.
+
+## Technologies Used
+A table with columns: Technology | Purpose | Version (if known). Include every item from the analysis.
+
+## API Reference (only if the project exposes an API)
+List each endpoint with method, path, purpose, request/response shape.
+
+## Contributing
+Concrete contributing notes: how to run tests, coding conventions, where to file issues.
+
+Be specific, cite file paths, and avoid marketing fluff. Output pure Markdown — no wrapping code fences around the whole document."""
 
         return await self._generate(prompt)
 
     async def generate_diagrams(self, analysis: Dict) -> Dict[str, str]:
-        """Generate Mermaid diagram code"""
-        prompt = f"""Based on this analysis, generate Mermaid diagram code.
+        """
+        Generate three Mermaid diagrams. Each runs as a focused LLM call so
+        the model can produce a detailed diagram instead of three cramped
+        ones from a single prompt. Calls run in parallel.
+        """
+        analysis_json = json.dumps(analysis, indent=2)
+
+        tasks = [
+            self._diagram_architecture(analysis_json),
+            self._diagram_flowchart(analysis_json),
+            self._diagram_class(analysis_json),
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        keys = ["architecture", "flowchart", "class_diagram"]
+        diagrams: Dict[str, str] = {}
+        for key, result in zip(keys, results):
+            if isinstance(result, Exception):
+                logger.exception("Diagram generation failed for %s: %s", key, result)
+                diagrams[key] = ""
+            else:
+                diagrams[key] = _fix_mermaid(result or "")
+        return diagrams
+
+    _MERMAID_RULES = (
+        "STRICT Mermaid syntax rules:\n"
+        "- Edge labels use -->|label| (no trailing > after the closing pipe)\n"
+        "- Node IDs are alphanumeric, no spaces (use A, B1, ServiceNode, etc.)\n"
+        "- Node labels in brackets/parens can contain spaces: A[My Service]\n"
+        "- Include at least one edge label per connection to show relationship type\n"
+        "- NEVER draw an edge that targets a subgraph label — subgraphs are not nodes.\n"
+        "  WRONG: E -->|calls| subgraph Backend\n"
+        "  Declare subgraphs as blocks first, then target a NODE inside them:\n"
+        "      subgraph Backend\n"
+        "          S1[Service]\n"
+        "      end\n"
+        "      E -->|calls| S1\n"
+        "- Every `subgraph Name` must be matched by an `end` on its own line.\n"
+        "Return ONLY the raw Mermaid code — no ```mermaid fences, no explanation."
+    )
+
+    async def _diagram_architecture(self, analysis_json: str) -> str:
+        """High-level architecture: layers, services, external systems."""
+        prompt = f"""Generate a detailed Mermaid architecture diagram for this codebase.
 
 Analysis:
-{json.dumps(analysis, indent=2)}
+{analysis_json}
 
-Generate THREE diagrams as JSON:
-{{
-    "class_diagram": "mermaid code for class/component relationships",
-    "flowchart": "mermaid code for main application flow",
-    "architecture": "mermaid code for high-level architecture"
-}}
+Requirements:
+- Use `graph TB` or `flowchart TB`
+- Show EVERY major component from the analysis — aim for 8-15 nodes
+- Group by layer using `subgraph` blocks (e.g. Frontend, API Layer, Services, Storage, External)
+- Show external systems (LLM providers, databases, third-party APIs) as distinct nodes
+- Every edge labelled with the relationship type (e.g. "HTTP", "embeds", "streams SSE", "invokes")
 
-STRICT Mermaid syntax rules:
-- Edge labels use -->|label| not -->|label|>
-- flowchart TB or graph TB (not LR unless needed)
-- No trailing > after closing pipe in edge labels
-- Node IDs must be alphanumeric with no spaces
+{self._MERMAID_RULES}"""
+        return await self._call_mermaid(prompt)
 
-Example of CORRECT syntax:
-graph TB
-    A[Component] -->|uses| B[Service]
-    B -->|calls| C[Database]
+    async def _diagram_flowchart(self, analysis_json: str) -> str:
+        """Request / data flow through the primary user journey."""
+        prompt = f"""Generate a detailed Mermaid flowchart showing the end-to-end flow of the primary user action in this project (e.g. analyzing a repo, sending a chat message — pick the most central user journey from the analysis).
 
-Return ONLY valid JSON."""
+Analysis:
+{analysis_json}
 
-        # Ollama local models are unreliable with strict JSON — use regex fallback
-        use_json_mode = self.provider != "ollama"
-        response = await self._generate(prompt, json_mode=use_json_mode)
+Requirements:
+- Use `flowchart TD` or `flowchart TB`
+- Start from the user action (e.g. "User submits URL") and follow through to the final result visible to the user
+- Aim for 10-20 nodes covering every meaningful step: input validation, async dispatch, external calls, state transitions, streaming, final response
+- Use decision diamonds `A{{"Is X valid?"}}` for branching logic
+- Label every edge with what's happening at that step
+- Include error/failure paths where they exist in the code
+- DO NOT use subgraphs in the flowchart — keep it a linear/branching flow
 
-        if self.provider == "ollama" and isinstance(response, str):
-            return self._extract_mermaid(response)
+{self._MERMAID_RULES}"""
+        return await self._call_mermaid(prompt)
 
-        if isinstance(response, dict):
-            return {k: _fix_mermaid(v) for k, v in response.items()}
+    async def _diagram_class(self, analysis_json: str) -> str:
+        """Class/component relationships — who composes or uses whom."""
+        prompt = f"""Generate a Mermaid class diagram showing the core classes/modules of this codebase and their relationships.
 
-        return response
+Analysis:
+{analysis_json}
+
+Requirements:
+- Use `classDiagram`
+- Include the 6-12 most important classes/services/components from the analysis
+- For each, show 3-5 representative methods or fields
+- Draw composition (`*--`), aggregation (`o--`), and dependency (`..>`) relationships where they exist
+- Label relationships with a verb (e.g. "uses", "creates", "retrieves")
+
+If the project is not strongly class-oriented (e.g. a functional frontend), produce a component diagram using `classDiagram` with modules as "classes" and their exports as methods.
+
+{self._MERMAID_RULES}"""
+        return await self._call_mermaid(prompt)
+
+    async def _call_mermaid(self, prompt: str) -> str:
+        """Plain-text LLM call that strips accidental ```mermaid fences."""
+        text = await self._generate(prompt, json_mode=False)
+        if not isinstance(text, str):
+            return ""
+        text = text.strip()
+        fence_match = re.search(r"```(?:mermaid)?\s*\n([\s\S]*?)```", text)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        return text
 
     # ------------------------------------------------------------------
     # Chat (RAG-aware)
@@ -281,7 +467,7 @@ Return ONLY valid JSON."""
 
             if response.status_code == 429:
                 wait = int(response.headers.get("retry-after", 2 ** (attempt + 1)))
-                print(f"  ⏳ Groq rate limit hit — retrying in {wait}s (attempt {attempt + 1}/5)")
+                logger.warning("Groq rate limit hit — retrying in %ss (attempt %s/5)", wait, attempt + 1)
                 await asyncio.sleep(wait)
                 continue
 
@@ -325,18 +511,25 @@ Return ONLY valid JSON."""
             api_key=self.nim_api_key,
             timeout=120.0,
         )
+
+        # Only Nemotron-family reasoning models accept enable_thinking / reasoning_budget.
+        # Non-reasoning models (MiniMax, Llama, Mistral) reject the extra keys.
+        is_reasoning_model = "nemotron" in self.nim_model.lower()
+        kwargs: Dict = {
+            "model": self.nim_model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 16384 if is_reasoning_model else 8192,
+            "stream": True,
+        }
+        if is_reasoning_model:
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": True},
+                "reasoning_budget": 16384,
+            }
+
         try:
-            stream = await client.chat.completions.create(
-                model=self.nim_model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=16384,
-                stream=True,
-                extra_body={
-                    "chat_template_kwargs": {"enable_thinking": True},
-                    "reasoning_budget": 16384,
-                },
-            )
+            stream = await client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 if not chunk.choices:
                     continue
@@ -410,8 +603,8 @@ Return ONLY valid JSON."""
                 response.raise_for_status()
                 text = response.json().get("response", "")
                 return self._parse_json(text) if json_mode else text
-            except Exception as e:
-                print(f"Ollama Error: {e}")
+            except Exception:
+                logger.exception("Ollama request failed")
                 raise
 
     async def _ollama_stream(self, messages: List[Dict]) -> AsyncGenerator[str, None]:
@@ -484,7 +677,7 @@ Return ONLY valid JSON."""
                 import ast
                 return ast.literal_eval(cleaned)
             except Exception:
-                print(f"Failed to parse JSON: {text[:200]}...")
+                logger.warning("Failed to parse JSON from LLM output: %s...", text[:200])
                 return {
                     "overview": "Analysis completed but response could not be parsed.",
                     "purpose": text[:500] if text else "No output received from LLM.",
@@ -502,24 +695,26 @@ Return ONLY valid JSON."""
                     "complexity": "unknown",
                 }
 
-    def _build_code_context(self, code_data: Dict, max_chars: int = 15000) -> str:
+    def _build_code_context(self, code_data: Dict, max_chars: int = 35000) -> str:
         context_parts = []
         char_count = 0
 
-        # Groq has a strict HTTP payload limit (~6 MB) and token limits per request.
-        # Keep the context small enough that the full analysis prompt stays under ~20k chars.
+        # Groq free-tier has a per-request payload limit that rejects very
+        # large prompts with HTTP 413. 35K chars (~8.5K tokens) is the sweet
+        # spot: big enough for rich analysis, small enough to fit. Paid tiers
+        # and Gemini can take much more.
         if self.provider == "ollama":
-            max_chars = 12000
-            max_file_chars = 2000
+            max_chars = 18000
+            max_file_chars = 2500
         elif self.provider == "groq":
-            max_chars = 20000
-            max_file_chars = 1500
-        elif self.provider == "nim":
-            max_chars = 20000
-            max_file_chars = 1500
-        else:  # gemini
-            max_chars = 50000
+            max_chars = 35000
             max_file_chars = 3000
+        elif self.provider == "nim":
+            max_chars = 50000
+            max_file_chars = 4000
+        else:  # gemini
+            max_chars = 100000
+            max_file_chars = 8000
 
         priority_patterns = [
             "main", "app", "index", "server", "config",

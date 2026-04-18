@@ -2,7 +2,6 @@
 
 > AI-powered code intelligence platform — clone any GitHub repo, get instant architecture analysis, auto-generated documentation, interactive Mermaid diagrams, and a RAG-powered chat that searches the actual source code.
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
@@ -14,12 +13,12 @@
 
 | | Feature | Description |
 |---|---|---|
-| 🔍 | **Architecture Analysis** | Detects patterns (MVC, Microservices, Monolith), components, entry points, and complexity |
+| 🔍 | **Architecture Analysis** | Four parallel LLM sub-calls (overview · architecture · files · insights) — richer output, 3-4× faster than one mega-prompt |
 | 📄 | **Auto Documentation** | Generates structured Markdown docs — overview, features, setup, key components |
-| 📊 | **Live Diagrams** | Architecture, class diagram, and flowchart rendered with Mermaid.js |
-| 💬 | **RAG-Powered Chat** | Embeds code chunks into ChromaDB; retrieves relevant files before every LLM answer |
+| 📊 | **Live Diagrams** | Architecture, class diagram, and flowchart generated in parallel with Mermaid.js |
+| 💬 | **RAG-Powered Chat** | Two-stage retrieval: bi-encoder pulls 20 candidates, cross-encoder reranks to top-5 before every LLM answer |
 | ⚡ | **Real-time Streaming** | SSE progress bar during analysis + word-by-word streamed chat responses |
-| 🔒 | **Multi-Provider LLM** | Groq (fast, free) · Gemini (cloud) · Ollama (100% local, no data leaves your machine) |
+| 🔒 | **Multi-Provider LLM** | Groq (fast, free) · NVIDIA NIM (large context) · Gemini (cloud) · Ollama (100% local) |
 
 ---
 
@@ -29,10 +28,12 @@
 | | Technology |
 |---|---|
 | Framework | FastAPI (async) + Uvicorn |
-| LLM Providers | [Groq](https://console.groq.com) `llama-3.3-70b-versatile` · Google Gemini · Ollama |
-| RAG / Embeddings | ChromaDB `EphemeralClient` + built-in `all-MiniLM-L6-v2` ONNX (~23 MB, no PyTorch) |
+| LLM Providers | [Groq](https://console.groq.com) `llama-3.3-70b-versatile` · [NVIDIA NIM](https://build.nvidia.com) (Nemotron / MiniMax / Llama) · Google Gemini · Ollama |
+| Embeddings | [fastembed](https://github.com/qdrant/fastembed) (ONNX runtime, no PyTorch) + `BAAI/bge-small-en-v1.5` (384-dim) |
+| Reranker | `Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder (ONNX) |
+| Vector Store | ChromaDB `EphemeralClient` |
 | Repo Cloning | GitPython |
-| HTTP Client | httpx (async) |
+| HTTP Client | httpx (async) · openai SDK (for NIM) |
 
 ### Frontend
 | | Technology |
@@ -42,6 +43,26 @@
 | Diagrams | Mermaid.js |
 | Markdown | react-markdown + remark-gfm + react-syntax-highlighter |
 | Streaming | Native `EventSource` (SSE) + Fetch `ReadableStream` |
+
+---
+
+## ML Algorithms & Models
+
+The retrieval pipeline is a classic two-stage **retrieve-then-rerank** pattern: a cheap bi-encoder narrows the whole repo to 20 candidates, then an expensive cross-encoder rescores only those 20 for precision. All inference runs on CPU via ONNX Runtime — no GPU, no PyTorch.
+
+| Stage | Algorithm / Model | Type | Size | Purpose |
+|---|---|---|---|---|
+| **Chunking** | Sliding window (60 lines, 10-line overlap) | Deterministic | — | Split each source file into retrievable units while preserving cross-chunk context |
+| **Junk filter** | Extension + size heuristics | Deterministic | — | Drops `.min.js`, `.bundle.js`, source maps, files >500 KB before indexing |
+| **Embedding** | `BAAI/bge-small-en-v1.5` | Bi-encoder transformer (384-dim) | ~130 MB | Encodes query and chunks into dense vectors independently |
+| **Dense retrieval** | Cosine similarity over HNSW | Approximate nearest-neighbor | — | ChromaDB pulls top-20 candidates from the vector index |
+| **Reranking** | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder transformer | ~90 MB | Jointly scores each `(query, chunk)` pair → top-5 for the LLM |
+| **Generation** | `llama-3.3-70b-versatile` (Groq) · Nemotron / MiniMax (NIM) · Gemini · Mistral (Ollama) | Causal LLM | — | Produces structured analysis JSON, Markdown docs, Mermaid diagrams, and streamed chat replies |
+| **Inference runtime** | [ONNX Runtime](https://onnxruntime.ai/) via [fastembed](https://github.com/qdrant/fastembed) | CPU graph executor | — | 2-3× faster than `sentence-transformers`, no PyTorch dependency |
+
+**Why two stages?** A bi-encoder is fast but treats the query and chunk separately, which misses subtle relevance. A cross-encoder reads both together — far more accurate but too slow to run over an entire repo. Running the bi-encoder first to get 20 candidates, then the cross-encoder to rerank, gets you cross-encoder precision at bi-encoder speed.
+
+Set `ENABLE_RERANK=false` to skip the second stage (faster chat, lower precision). Set `ENABLE_RAG=false` to disable retrieval entirely and stuff the analysis JSON into the chat prompt instead.
 
 ---
 
@@ -61,8 +82,8 @@ Browser (React)
            │                                          │
      ┌─────┴──────┐              ┌────────────────────┘
      │            │              │
-  GitPython   CodeParser    LLMService           EmbeddingService
-  (clone)     (parse files) (Groq/Gemini/Ollama) (ChromaDB RAG)
+  GitPython   CodeParser    LLMService                 EmbeddingService
+  (clone)     (parse files) (Groq/NIM/Gemini/Ollama)   (fastembed + ChromaDB + reranker)
 ```
 
 ### Analysis pipeline (background task)
@@ -73,24 +94,33 @@ POST /api/analyze/
         │
         ├─ 1. Clone repo (GitPython → ../cloned_repos/owner__repo/)
         ├─ 2. Parse files (supported extensions only, ignores node_modules etc.)
-        ├─ 3. Build vector index (ChromaDB: chunk 60 lines, embed with all-MiniLM)
-        ├─ 4. LLM analyze (architecture, tech stack, key files, complexity)
+        ├─ 3. Build vector index (fastembed bge-small → ChromaDB, 60-line chunks)
+        ├─ 4. LLM analyze — 4 parallel sub-calls via asyncio.gather:
+        │       ├─ overview        (purpose, technologies, complexity)
+        │       ├─ architecture    (pattern, components, 300-500 word description)
+        │       ├─ files           (key files, entry points, dependencies)
+        │       └─ insights        (strengths + improvements with file evidence)
         ├─ 5. LLM generate docs (Markdown)
-        └─ 6. LLM generate diagrams (3× Mermaid JSON)
+        └─ 6. LLM generate diagrams — 3 parallel sub-calls:
+                ├─ architecture (subgraphs, 8-15 nodes)
+                ├─ flowchart    (10-20 nodes, decision diamonds)
+                └─ class        (classDiagram, 6-12 components)
                 └─► job["status"] = "completed"
 
 GET /api/analyze/stream/{id}   — SSE polling every 500ms, emits {status, progress}
 GET /api/analyze/results/{id}  — returns {analysis, documentation, diagrams}
 ```
 
-### RAG chat pipeline
+### RAG chat pipeline (two-stage retrieval)
 
 ```
 User question
-  └─► embed question (all-MiniLM-L6-v2)
-        └─► ChromaDB cosine similarity → top-5 code chunks
-              └─► LLM prompt = system(repo overview + chunks) + history + question
-                    └─► streamed response (word-by-word SSE)
+  └─► embed question (fastembed: BAAI/bge-small-en-v1.5 → 384-dim vector)
+        └─► ChromaDB cosine similarity → top-20 candidate chunks
+              └─► cross-encoder rerank (Xenova/ms-marco-MiniLM-L-6-v2)
+                    scores every (query, chunk) pair jointly → top-5
+                    └─► LLM prompt = system(repo overview + chunks) + last 10 messages + question
+                          └─► streamed response (word-by-word SSE)
 ```
 
 ---
@@ -154,11 +184,19 @@ File: `backend/.env` (never commit — already in `.gitignore`)
 
 ```env
 # ── LLM Provider ─────────────────────────────────────────
-LLM_PROVIDER=groq                       # groq | gemini | ollama
+LLM_PROVIDER=groq                       # groq | nim | gemini | ollama
 
 # Groq (recommended — fast, generous free tier)
 GROQ_API_KEY=gsk_your_key_here
 GROQ_MODEL=llama-3.3-70b-versatile
+
+# NVIDIA NIM (large context, strong reasoning models)
+# LLM_PROVIDER=nim
+# NIM_API_KEY=nvapi-your_key_here
+# NIM_MODEL=nvidia/nemotron-3-nano-30b-a3b          # fast hybrid MoE
+# NIM_MODEL=nvidia/llama-3.3-nemotron-super-49b-v1  # larger reasoning model
+# NIM_MODEL=minimaxai/minimax-m2.5                  # strong general model
+# NIM_MODEL=meta/llama-3.3-70b-instruct             # broad coverage
 
 # Gemini
 # LLM_PROVIDER=gemini
@@ -171,11 +209,18 @@ GROQ_MODEL=llama-3.3-70b-versatile
 
 # ── Paths ─────────────────────────────────────────────────
 REPOS_DIR=../cloned_repos               # where repos are cloned
-OUTPUT_DIR=../output
+
+# ── RAG ───────────────────────────────────────────────────
+ENABLE_RAG=true                         # false disables ChromaDB entirely (~300 MB RAM saved)
+ENABLE_RERANK=true                      # false skips cross-encoder rerank (faster, lower precision)
+EMBED_MODEL=BAAI/bge-small-en-v1.5
+RERANK_MODEL=Xenova/ms-marco-MiniLM-L-6-v2
 
 # ── App ───────────────────────────────────────────────────
 DEBUG=true
 ```
+
+> **First-run downloads**: With RAG enabled, the first analysis downloads ~220 MB of ONNX models (bge-small + cross-encoder) into the fastembed cache. Cached forever after.
 
 ---
 
@@ -249,9 +294,6 @@ Logic_Lens/
 │   ├── package.json
 │   └── vite.config.js               # Dev proxy: /api → localhost:8000
 │
-├── Dockerfile                       # Multi-stage: Node (build) → Python (serve)
-├── railway.toml                     # Railway deployment config
-├── .dockerignore
 └── .gitignore
 ```
 
@@ -274,52 +316,13 @@ Logic_Lens/
 
 ---
 
-## Deployment — Railway
-
-The repo ships with a production-ready multi-stage `Dockerfile` and `railway.toml`.
-
-### Steps
-
-1. Push to GitHub
-2. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → select this repo
-3. Railway auto-detects `railway.toml` and builds the Docker image
-4. Set environment variables in the Railway dashboard:
-
-| Variable | Value |
-|---|---|
-| `GROQ_API_KEY` | Your Groq API key |
-| `LLM_PROVIDER` | `groq` |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` |
-| `REPOS_DIR` | `/tmp/cloned_repos` |
-| `DEBUG` | `false` |
-
-5. Enable **Sleep on inactivity** (Service → Settings) to stay within the free $5/month credit
-
-### Self-hosted with Docker
-
-```bash
-# Build (from repo root)
-docker build -t logiclens .
-
-# Run
-docker run -p 8000:8000 \
-  -e GROQ_API_KEY=gsk_your_key \
-  -e LLM_PROVIDER=groq \
-  -e REPOS_DIR=/tmp/cloned_repos \
-  logiclens
-```
-
-App available at `http://localhost:8000`
-
----
-
 ## Known Limitations
 
 | Limitation | Detail |
 |---|---|
-| In-memory job store | `analysis_jobs` dict resets on server restart — production should use Redis |
+| In-memory job store | `analysis_jobs` dict resets on server restart |
 | Public repos only | Private GitHub repos require SSH/token auth (not implemented) |
-| Large repos | Context is capped: Groq 20K chars · Gemini 50K · Ollama 12K. Very large repos get truncated to priority files |
+| Large repos | Context is capped: Groq 35K chars · NIM 50K · Gemini 100K · Ollama 18K. Very large repos get truncated to priority files |
 | Stale clones | Already-cloned repos are reused. Delete `cloned_repos/<owner>__<repo>/` to force a fresh clone |
 | ChromaDB ephemeral | Vector index resets on restart — re-analyzing rebuilds it in ~30 seconds |
 

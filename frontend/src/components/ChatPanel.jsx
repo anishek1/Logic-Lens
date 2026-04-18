@@ -53,7 +53,10 @@ export default function ChatPanel({ context, jobId, onBackToAnalysis }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: msg, history: messages, context: context?.analysis, job_id: jobId }),
             })
-            if (!res.ok) throw new Error('Chat request failed')
+            if (!res.ok) {
+                const detail = await res.text().catch(() => '')
+                throw new Error(`Chat request failed (${res.status}${detail ? ': ' + detail.slice(0, 200) : ''})`)
+            }
 
             const reader  = res.body.getReader()
             const decoder = new TextDecoder()
@@ -66,8 +69,9 @@ export default function ChatPanel({ context, jobId, onBackToAnalysis }) {
             }
             setMessages(p => [...p, { role: 'assistant', content: full }])
             setStreaming('')
-        } catch {
-            setMessages(p => [...p, { role: 'assistant', content: '❌ Something went wrong. Please try again.', isError: true }])
+        } catch (err) {
+            console.error('ChatPanel: send failed', err)
+            setMessages(p => [...p, { role: 'assistant', content: `❌ ${err.message || 'Something went wrong. Please try again.'}`, isError: true }])
         } finally {
             setLoading(false)
             inputRef.current?.focus()

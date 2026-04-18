@@ -1,19 +1,36 @@
 """
 Chat Routes - Conversational interface for code Q&A (RAG-enabled)
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import json
+import logging
 
 from app.services.llm_service import LLMService
 from app.services.embedding_service import get_embedding_service
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
-# Conversation history storage (in-memory, resets on restart)
+# Conversation history storage (in-memory, resets on restart).
+# Keys should be scoped per analysis (job_id) so separate analyses do not
+# bleed chat history into each other.
 conversations: Dict[str, List[Dict]] = {}
+
+
+def _conv_key(conversation_id: Optional[str], job_id: Optional[str]) -> str:
+    """Compose a conversation key that isolates history per job.
+
+    Falls back to the supplied conversation_id, then to a generic default.
+    """
+    if conversation_id:
+        return conversation_id
+    if job_id:
+        return f"job:{job_id}"
+    return "default"
 
 
 class ChatMessage(BaseModel):
@@ -35,11 +52,10 @@ async def chat(request: ChatRequest):
     Send a message and get an AI response (SSE stream).
     Retrieves relevant code chunks from the vector index when job_id is provided.
     """
-    conv_id = request.conversation_id or "default"
-    if conv_id not in conversations:
-        conversations[conv_id] = []
-
-    conversations[conv_id].append({"role": "user", "content": request.message})
+    conv_id = _conv_key(request.conversation_id, request.job_id)
+    conversations.setdefault(conv_id, []).append(
+        {"role": "user", "content": request.message}
+    )
 
     async def generate_response():
         llm = LLMService()
@@ -58,7 +74,11 @@ async def chat(request: ChatRequest):
         conversations[conv_id].append({"role": "assistant", "content": full_response})
         yield f"data: {json.dumps({'done': True})}\n\n"
 
-    return StreamingResponse(generate_response(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate_response(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/stream")
@@ -82,12 +102,13 @@ async def chat_stream(request: ChatRequest):
                 yield chunk
 
         except Exception as e:
+            logger.exception("chat_stream failed")
             yield f"\n\n❌ Error: {str(e)}"
 
     return StreamingResponse(
         generate(),
         media_type="text/plain",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
     )
 
 
@@ -100,8 +121,7 @@ async def get_history(conversation_id: str):
 
 @router.delete("/history/{conversation_id}")
 async def clear_history(conversation_id: str):
-    if conversation_id in conversations:
-        del conversations[conversation_id]
+    conversations.pop(conversation_id, None)
     return {"status": "cleared"}
 
 
@@ -116,6 +136,7 @@ async def _retrieve_chunks(message: str, job_id: Optional[str]) -> List[Dict]:
     try:
         embedder = get_embedding_service()
         return await embedder.retrieve(message, job_id, top_k=5)
-    except Exception as e:
-        print(f"RAG retrieval failed: {e}")
+    except Exception:
+        # RAG is best-effort — log and fall through so chat still works without code context.
+        logger.exception("RAG retrieval failed for job %s", job_id)
         return []

@@ -35,7 +35,7 @@ export default function Header({ darkMode, onToggleTheme }) {
                     </button>
 
                     <a
-                        href="https://github.com"
+                        href="https://github.com/anishek1/Logic-Lens"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="btn-icon"

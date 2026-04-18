@@ -3,15 +3,17 @@ Code Parser Service - Clone repos and parse source code files
 """
 import os
 import re
-import json
+import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict
 from git import Repo
 from git.exc import GitCommandError
 import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class CodeParser:
@@ -48,10 +50,10 @@ class CodeParser:
     def __init__(self, repos_dir: str = None):
         if repos_dir is None:
             repos_dir = os.getenv("REPOS_DIR", "../cloned_repos")
-        self.repos_dir = Path(repos_dir)
+        self.repos_dir = Path(repos_dir).resolve()
         self.repos_dir.mkdir(parents=True, exist_ok=True)
-    
-    async def clone_and_parse(self, repo_url: str) -> Dict[str, any]:
+
+    async def clone_and_parse(self, repo_url: str) -> Dict[str, Any]:
         """Clone a repository and parse its code files"""
         # Normalise GitHub URLs — strip /tree/..., /blob/..., etc. so that
         # git clone always receives a bare https://github.com/owner/repo URL.
@@ -82,11 +84,22 @@ class CodeParser:
         
         return await self.parse_local(str(local_path))
     
-    async def parse_local(self, path: str) -> Dict[str, any]:
-        """Parse code files from a local directory"""
-        root_path = Path(path)
+    async def parse_local(self, path: str) -> Dict[str, Any]:
+        """Parse code files from a local directory.
+
+        The path must resolve to a location inside ``self.repos_dir`` to prevent
+        path-traversal (e.g. ``../../etc``). Symlinks are resolved before the check.
+        """
+        root_path = Path(path).resolve()
         if not root_path.exists():
             raise ValueError(f"Path does not exist: {path}")
+
+        try:
+            root_path.relative_to(self.repos_dir)
+        except ValueError:
+            raise ValueError(
+                f"Path must be inside {self.repos_dir} (got: {root_path})"
+            )
         
         files = []
         total_lines = 0
@@ -124,7 +137,7 @@ class CodeParser:
                 })
                 
             except Exception as e:
-                # Skip files that can't be read
+                logger.debug("Skipping unreadable file %s: %s", file_path, e)
                 continue
         
         return {

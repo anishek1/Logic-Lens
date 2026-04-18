@@ -29,20 +29,25 @@ export default function LoadingProgress({ jobId, onComplete, onError }) {
         const es = new EventSource(`${import.meta.env.VITE_API_URL || ''}/api/analyze/stream/${jobId}`)
 
         es.onmessage = (e) => {
+            let d
             try {
-                const d = JSON.parse(e.data)
-                setProgress(d.progress || 0)
-                setStepIdx(stepFromProgress(d.progress || 0))
-                setStatus(d.status)
+                d = JSON.parse(e.data)
+            } catch (err) {
+                console.error('LoadingProgress: malformed SSE payload', err, e.data)
+                return
+            }
 
-                if (d.status === 'completed') {
-                    es.close()
-                    onCompleteRef.current?.()
-                } else if (d.status === 'failed') {
-                    es.close()
-                    onErrorRef.current?.(d.error || 'Analysis failed')
-                }
-            } catch {}
+            setProgress(d.progress || 0)
+            setStepIdx(stepFromProgress(d.progress || 0))
+            setStatus(d.status)
+
+            if (d.status === 'completed') {
+                es.close()
+                onCompleteRef.current?.()
+            } else if (d.status === 'failed') {
+                es.close()
+                onErrorRef.current?.(d.error || 'Analysis failed')
+            }
         }
 
         es.onerror = () => {
