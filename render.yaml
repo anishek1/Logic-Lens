@@ -15,9 +15,11 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.0"
       - key: LLM_PROVIDER
-        value: groq
-      - key: GROQ_API_KEY
+        value: nim
+      - key: NIM_API_KEY
         sync: false
+      - key: NIM_MODEL
+        value: meta/llama-3.1-8b-instruct
       - key: FASTEMBED_CACHE_DIR
         value: /data/fastembed_cache
       - key: REPOS_DIR
