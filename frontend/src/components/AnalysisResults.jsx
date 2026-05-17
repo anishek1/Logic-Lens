@@ -55,6 +55,7 @@ export default function AnalysisResults({ data }) {
         { id: 'architecture',  label: 'Architecture',  icon: '🏗️' },
         { id: 'diagrams',      label: 'Diagrams',      icon: '📊' },
         { id: 'docs',          label: 'Docs',          icon: '📄' },
+        { id: 'onboarding',    label: 'Week 1 Guide',  icon: '🧭' },
     ]
     const DIAGRAM_TYPES = [
         { id: 'architecture', label: 'Architecture' },
@@ -327,6 +328,174 @@ export default function AnalysisResults({ data }) {
                     </div>
                 </div>
             )}
+
+            {/* ── Week 1 Onboarding Guide ───────────────────── */}
+            {section === 'onboarding' && (() => {
+                const guide = analysis?.onboarding_guide
+                if (!guide || Object.keys(guide).length === 0) {
+                    return (
+                        <div className="animate-fade-in flex flex-col items-center justify-center py-20 text-center">
+                            <div className="w-14 h-14 rounded-2xl bg-[var(--bg-overlay)] flex items-center justify-center mb-4">
+                                <svg className="w-7 h-7 text-[var(--text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.6">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                                </svg>
+                            </div>
+                            <p className="text-sm text-[var(--text-muted)]">Onboarding guide not available for this analysis.</p>
+                            <p className="text-xs text-[var(--text-muted)] mt-1">Re-analyze the repository to generate a Week 1 guide.</p>
+                        </div>
+                    )
+                }
+                return (
+                    <div className="space-y-4 animate-fade-in">
+                        {/* Hero */}
+                        <div className="card neon-border" style={{
+                            background: 'linear-gradient(135deg, rgba(0,212,255,0.05) 0%, rgba(16,185,129,0.08) 50%, rgba(99,102,241,0.05) 100%)'
+                        }}>
+                            <div className="flex items-center gap-3 mb-1">
+                                <span className="text-2xl">🧭</span>
+                                <h2 className="text-lg font-bold text-[var(--text-primary)]">Week 1 Onboarding Guide</h2>
+                            </div>
+                            <p className="text-sm text-[var(--text-secondary)]">
+                                Everything a new engineer needs to go from zero to productive — specific file paths, exact commands, real gotchas.
+                            </p>
+                        </div>
+
+                        {/* Quick Start */}
+                        {guide.quick_start?.length > 0 && (
+                            <div className="card neon-border">
+                                <h3 className="text-sm font-semibold text-emerald-400 mb-3 flex items-center gap-2">
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                                    </svg>
+                                    Quick Start
+                                </h3>
+                                <ol className="space-y-2">
+                                    {guide.quick_start.map((step, i) => (
+                                        <li key={i} className="flex items-start gap-3">
+                                            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-500/15 text-emerald-400 text-xs font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                                            <span className="text-sm text-[var(--text-secondary)] leading-relaxed">{step}</span>
+                                        </li>
+                                    ))}
+                                </ol>
+                            </div>
+                        )}
+
+                        {/* Files to Read First */}
+                        {guide.files_to_read_first?.length > 0 && (
+                            <div className="card neon-border">
+                                <h3 className="text-sm font-semibold text-[var(--cyan)] mb-3 flex items-center gap-2">
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                                    </svg>
+                                    Read These First (in order)
+                                </h3>
+                                <div className="space-y-3">
+                                    {[...guide.files_to_read_first]
+                                        .sort((a, b) => (a.read_order ?? 99) - (b.read_order ?? 99))
+                                        .map((f, i) => (
+                                        <div key={i} className="flex items-start gap-3 py-2 border-b border-[var(--border-subtle)] last:border-0">
+                                            <span className="flex-shrink-0 w-6 h-6 rounded-md bg-[var(--cyan-dim)] text-[var(--cyan)] text-xs font-bold flex items-center justify-center mt-0.5">
+                                                {f.read_order ?? i + 1}
+                                            </span>
+                                            <div className="min-w-0">
+                                                <span className="file-path block truncate mb-0.5">/{f.path}</span>
+                                                <p className="text-xs text-[var(--text-muted)] leading-relaxed">{f.why}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Conventions + Gotchas side by side */}
+                        <div className="grid sm:grid-cols-2 gap-4">
+                            {guide.conventions?.length > 0 && (
+                                <div className="card neon-border">
+                                    <h3 className="text-sm font-semibold text-violet-400 mb-3 flex items-center gap-2">
+                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/>
+                                        </svg>
+                                        Conventions
+                                    </h3>
+                                    <ul className="space-y-2">
+                                        {guide.conventions.map((c, i) => (
+                                            <li key={i} className="flex items-start gap-2 text-sm text-[var(--text-secondary)]">
+                                                <span className="text-violet-400 mt-0.5 flex-shrink-0">▸</span>{c}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                            {guide.gotchas?.length > 0 && (
+                                <div className="card neon-border">
+                                    <h3 className="text-sm font-semibold text-amber-400 mb-3 flex items-center gap-2">
+                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                        </svg>
+                                        Gotchas
+                                    </h3>
+                                    <ul className="space-y-2">
+                                        {guide.gotchas.map((g, i) => (
+                                            <li key={i} className="flex items-start gap-2 text-sm text-[var(--text-secondary)]">
+                                                <span className="text-amber-500 mt-0.5 flex-shrink-0">▸</span>{g}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Tech Debt vs Design */}
+                        {guide.tech_debt_vs_design?.length > 0 && (
+                            <div className="card neon-border">
+                                <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3 flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-[var(--cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                                    </svg>
+                                    Intentional Design vs. Tech Debt
+                                </h3>
+                                <div className="space-y-2">
+                                    {guide.tech_debt_vs_design.map((t, i) => (
+                                        <div key={i} className="flex items-start gap-3 py-2 border-b border-[var(--border-subtle)] last:border-0">
+                                            <span className={`flex-shrink-0 text-[0.65rem] font-bold px-1.5 py-0.5 rounded mt-0.5 uppercase tracking-wide ${
+                                                t.verdict === 'intentional'
+                                                    ? 'bg-emerald-500/15 text-emerald-400'
+                                                    : 'bg-amber-500/15 text-amber-400'
+                                            }`}>
+                                                {t.verdict === 'intentional' ? 'design' : 'debt'}
+                                            </span>
+                                            <div>
+                                                <p className="text-sm text-[var(--text-secondary)] font-medium">{t.item}</p>
+                                                <p className="text-xs text-[var(--text-muted)] mt-0.5 leading-relaxed">{t.reason}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Week 1 Checklist */}
+                        {guide.week1_checklist?.length > 0 && (
+                            <div className="card neon-border">
+                                <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3 flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-[var(--cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+                                    </svg>
+                                    Week 1 Checklist
+                                </h3>
+                                <ul className="space-y-2">
+                                    {guide.week1_checklist.map((task, i) => (
+                                        <li key={i} className="flex items-start gap-3">
+                                            <span className="flex-shrink-0 w-4 h-4 rounded border border-[var(--border-accent)] mt-0.5"/>
+                                            <span className="text-sm text-[var(--text-secondary)] leading-relaxed">{task}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                )
+            })()}
         </div>
     )
 }

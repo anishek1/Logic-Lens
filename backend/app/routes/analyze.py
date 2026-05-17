@@ -15,6 +15,7 @@ import traceback
 from app.services.code_parser import CodeParser
 from app.services.llm_service import LLMService
 from app.services.embedding_service import get_embedding_service
+from app.services import result_store
 
 logger = logging.getLogger(__name__)
 

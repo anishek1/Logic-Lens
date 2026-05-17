@@ -26,6 +26,16 @@ class AnalysisProgress(BaseModel):
     message: Optional[str] = None
 
 
+class OnboardingGuide(BaseModel):
+    """Week-1 onboarding guide generated alongside analysis"""
+    quick_start: List[str] = []
+    files_to_read_first: List[Dict[str, Any]] = []
+    conventions: List[str] = []
+    tech_debt_vs_design: List[Dict[str, str]] = []
+    gotchas: List[str] = []
+    week1_checklist: List[str] = []
+
+
 class AnalysisResponse(BaseModel):
     """Complete analysis response"""
     overview: str
@@ -38,6 +48,7 @@ class AnalysisResponse(BaseModel):
     strengths: List[str]
     improvements: List[str]
     complexity: str
+    onboarding_guide: Optional[Dict[str, Any]] = None
 
 
 class ChatMessage(BaseModel):

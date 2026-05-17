@@ -17,13 +17,31 @@ logger = logging.getLogger(__name__)
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# Groq free tier enforces strict per-minute token limits. Firing 5+ calls
+# simultaneously causes cascading 429s and multi-minute retry backoffs.
+# This semaphore limits concurrent Groq calls across all analysis sub-tasks.
+_groq_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_groq_semaphore() -> asyncio.Semaphore:
+    global _groq_semaphore
+    if _groq_semaphore is None:
+        limit = int(os.getenv("GROQ_CONCURRENCY", "2"))
+        _groq_semaphore = asyncio.Semaphore(limit)
+    return _groq_semaphore
+
 
 def _fix_mermaid(diagram: str) -> str:
     """Fix common LLM-generated Mermaid syntax errors."""
     if not isinstance(diagram, str):
         return diagram
+
+    # Normalize line endings
+    diagram = diagram.replace('\r\n', '\n').replace('\r', '\n')
+
     # Remove trailing > after edge label closing pipe: -->|label|> → -->|label|
     diagram = re.sub(r'(\|[^|]*)\|>', r'\1|', diagram)
+
     # Edges to 'subgraph X' are invalid — the subgraph label is not a node.
     # Strip the broken edge so at least the rest of the diagram renders.
     diagram = re.sub(
@@ -32,7 +50,31 @@ def _fix_mermaid(diagram: str) -> str:
         diagram,
         flags=re.MULTILINE,
     )
-    return diagram
+
+    # Strip %% comments — some Mermaid versions choke on them mid-diagram
+    diagram = re.sub(r'%%[^\n]*', '', diagram)
+
+    # Remove markdown bold/italic formatting LLMs sometimes add inside labels
+    diagram = re.sub(r'\*\*([^*\n]+)\*\*', r'\1', diagram)
+    diagram = re.sub(r'\*([^*\n]+)\*', r'\1', diagram)
+
+    # Remove backtick-quoted identifiers that confuse older Mermaid parsers
+    # `NodeName` → NodeName  (only when used as a standalone identifier)
+    diagram = re.sub(r'`([A-Za-z0-9_\- ]+)`', r'\1', diagram)
+
+    # Fix unbalanced subgraphs: count opens vs ends and append missing `end` lines
+    open_count = len(re.findall(r'^\s*subgraph\b', diagram, re.MULTILINE))
+    end_count  = len(re.findall(r'^\s*end\s*$',    diagram, re.MULTILINE))
+    if open_count > end_count:
+        diagram = diagram.rstrip() + ('\n    end' * (open_count - end_count))
+
+    # Collapse 3+ consecutive blank lines to one
+    diagram = re.sub(r'\n{3,}', '\n\n', diagram)
+
+    # Strip trailing whitespace from every line
+    diagram = '\n'.join(line.rstrip() for line in diagram.split('\n'))
+
+    return diagram.strip()
 
 
 class LLMService:
@@ -57,9 +99,9 @@ class LLMService:
                 logger.warning("GEMINI_API_KEY not found. Falling back to Groq.")
                 self.provider = "groq"
             else:
-                import google.generativeai as genai
-                genai.configure(api_key=api_key)
-                self.model = genai.GenerativeModel("gemini-pro")
+                from google import genai as google_genai
+                self._gemini_client = google_genai.Client(api_key=api_key)
+                self._gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
         if self.provider == "groq" and not self.groq_api_key:
             logger.warning("GROQ_API_KEY not found. Falling back to Ollama.")
@@ -96,6 +138,7 @@ class LLMService:
             self._analyze_architecture(meta),
             self._analyze_files(meta),
             self._analyze_insights(meta),
+            self._analyze_onboarding(meta),
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -117,6 +160,7 @@ class LLMService:
         merged.setdefault("strengths", [])
         merged.setdefault("improvements", [])
         merged.setdefault("complexity", "unknown")
+        merged.setdefault("onboarding_guide", {})
         return merged
 
     async def _analyze_overview(self, meta: str) -> Dict:
@@ -205,6 +249,59 @@ Requirements: every item must name a specific file, function, or pattern. No gen
         result = await self._generate(prompt, json_mode=True)
         return result if isinstance(result, dict) else {}
 
+    async def _analyze_onboarding(self, meta: str) -> Dict:
+        """Week-1 onboarding guide — answers 'how do I start working on this?', not 'what is this?'."""
+        prompt = f"""{meta}
+
+You are a senior engineer writing a Week 1 onboarding guide for a new hire who has never seen this codebase.
+Your job is to tell them HOW TO START, not what the codebase IS. That distinction is everything.
+
+Every single item MUST cite a specific file path, function name, line range, or code pattern as evidence.
+NEVER give generic advice. Follow the examples exactly.
+
+Return JSON with EXACTLY these keys:
+{{
+    "quick_start": [
+        "Ordered setup steps. Each step is a concrete action with the exact command or file to open. Example: 'Install backend deps: `pip install -r backend/requirements.txt` — first run downloads ~220 MB ONNX models to the fastembed cache, takes 2-3 min.' Aim for 5-8 steps covering all services."
+    ],
+    "files_to_read_first": [
+        {{
+            "path": "exact/relative/path.ext",
+            "why": "What understanding you gain from reading this — phrased as 'after reading this, you will know X'. Not what the file does, but what mental model it builds. Example: 'After reading this, you will understand how every LLM provider (Groq, NIM, Gemini, Ollama) is selected and dispatched — every new feature touches this file.'",
+            "read_order": 1
+        }}
+    ],
+    "conventions": [
+        "A specific team convention with the file/function that demonstrates it. Bad: 'The team uses async/await'. Good: 'All I/O-bound work is offloaded via asyncio.to_thread() — never call a blocking library directly from async code (see embedding_service.py:build_index where chromadb.add is wrapped). Follow this pattern whenever adding new blocking calls.'"
+    ],
+    "tech_debt_vs_design": [
+        {{
+            "item": "A specific thing that looks odd or suboptimal, with file+line reference",
+            "verdict": "intentional | debt",
+            "reason": "Why it is what it is — the constraint, tradeoff, or known gap that explains it. Example: 'intentional — EphemeralClient in embedding_service.py keeps ChromaDB in-process with zero infra, acceptable for demo/portfolio but would be replaced by a persistent client in production.'"
+        }}
+    ],
+    "gotchas": [
+        "A non-obvious thing that WILL confuse a new engineer, with file evidence. Bad: 'Be careful with async code'. Good: 'analysis_jobs dict in analyze.py resets on every server restart — if you lose your job_id, the results are gone. This catches people who restart uvicorn mid-demo. There is intentionally no database persistence yet.'"
+    ],
+    "week1_checklist": [
+        "A concrete, completable task for the first week. Must be specific. Bad: 'Understand the architecture'. Good: 'Trace one full analysis request: set a breakpoint at run_analysis() in analyze.py, submit a small repo, and follow the call through code_parser → embedding_service.build_index → llm_service.analyze_codebase to see the 5 parallel LLM calls fire.'"
+    ]
+}}
+
+Requirements:
+- files_to_read_first: exactly 5 entries, ordered 1-5 (read_order field), each with a distinct "why" that is not a repeat of the file's purpose
+- conventions: at least 4 entries, each naming the specific file/function
+- tech_debt_vs_design: at least 4 entries, mix of intentional and debt verdicts
+- gotchas: at least 4 entries
+- week1_checklist: at least 5 entries
+
+Return ONLY valid JSON."""
+        result = await self._generate(prompt, json_mode=True)
+        if not isinstance(result, dict):
+            return {"onboarding_guide": {}}
+        return {"onboarding_guide": result}
+
     async def generate_documentation(self, analysis: Dict) -> str:
         """Generate comprehensive Markdown documentation from the analysis."""
         prompt = f"""You are writing the README for a technical project. Produce professional, detailed, developer-facing documentation in Markdown.
@@ -273,20 +370,22 @@ Be specific, cite file paths, and avoid marketing fluff. Output pure Markdown �
         return diagrams
 
     _MERMAID_RULES = (
-        "STRICT Mermaid syntax rules:\n"
-        "- Edge labels use -->|label| (no trailing > after the closing pipe)\n"
-        "- Node IDs are alphanumeric, no spaces (use A, B1, ServiceNode, etc.)\n"
-        "- Node labels in brackets/parens can contain spaces: A[My Service]\n"
-        "- Include at least one edge label per connection to show relationship type\n"
-        "- NEVER draw an edge that targets a subgraph label — subgraphs are not nodes.\n"
+        "STRICT Mermaid v11 syntax rules — violating any of these causes a parse error:\n"
+        "- Use `flowchart TB` (preferred over `graph TB`)\n"
+        "- Node IDs: alphanumeric + underscores only, no spaces, must start with a letter — e.g. A, B1, ApiRouter\n"
+        "- Node labels go inside brackets: A[My Service]  A(Rounded)  A{Decision}\n"
+        "- FORBIDDEN characters inside any label: & ; < > \" \\ — they break the parser\n"
+        "- Decision diamonds: A{Is valid?} — NO quotes, NO special chars inside {}\n"
+        "- Edge labels: -->|label here| (pipe-pipe, no trailing >)  -->|label|>—WRONG\n"
+        "- NEVER draw an edge whose target is a subgraph label — subgraphs are not nodes.\n"
         "  WRONG: E -->|calls| subgraph Backend\n"
-        "  Declare subgraphs as blocks first, then target a NODE inside them:\n"
-        "      subgraph Backend\n"
-        "          S1[Service]\n"
-        "      end\n"
-        "      E -->|calls| S1\n"
-        "- Every `subgraph Name` must be matched by an `end` on its own line.\n"
-        "Return ONLY the raw Mermaid code — no ```mermaid fences, no explanation."
+        "  RIGHT: subgraph Backend\n"
+        "             S1[Service]\n"
+        "         end\n"
+        "         E -->|calls| S1\n"
+        "- Every `subgraph Name` MUST have a matching `end` on its own line.\n"
+        "- NO %% comments, NO markdown bold (**text**), NO backtick identifiers.\n"
+        "Return ONLY the raw Mermaid code — no ```mermaid fences, no explanation, no preamble."
     )
 
     async def _diagram_architecture(self, analysis_json: str) -> str:
@@ -317,7 +416,7 @@ Requirements:
 - Use `flowchart TD` or `flowchart TB`
 - Start from the user action (e.g. "User submits URL") and follow through to the final result visible to the user
 - Aim for 10-20 nodes covering every meaningful step: input validation, async dispatch, external calls, state transitions, streaming, final response
-- Use decision diamonds `A{{"Is X valid?"}}` for branching logic
+- Use decision diamonds like A{{Is valid}} for branching — NO quotes or special chars inside the braces
 - Label every edge with what's happening at that step
 - Include error/failure paths where they exist in the code
 - DO NOT use subgraphs in the flowchart — keep it a linear/branching flow
@@ -380,16 +479,20 @@ If the project is not strongly class-oriented (e.g. a functional frontend), prod
             async for chunk in self._ollama_stream(messages):
                 yield chunk
         else:
-            # Gemini — no native messages API, flatten to single prompt
+            # Gemini — flatten history to a single prompt (no native chat messages API)
             flat = system_msg + "\n\n"
             for msg in history[-10:]:
                 role = "User" if msg["role"] == "user" else "Assistant"
                 flat += f"{role}: {msg['content']}\n"
             flat += f"User: {message}\nAssistant:"
-            response = self.model.generate_content(flat, stream=True)
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
+            try:
+                for chunk in self._gemini_client.models.generate_content_stream(
+                    model=self._gemini_model, contents=flat
+                ):
+                    if chunk.text:
+                        yield chunk.text
+            except Exception as e:
+                yield f"\n\nError: {str(e)}"
 
     # ------------------------------------------------------------------
     # Prompt builders
@@ -454,28 +557,29 @@ If the project is not strongly class-oriented (e.g. a functional frontend), prod
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
-        for attempt in range(5):
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    GROQ_API_URL,
-                    headers={
-                        "Authorization": f"Bearer {self.groq_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
+        async with _get_groq_semaphore():
+            for attempt in range(5):
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(
+                        GROQ_API_URL,
+                        headers={
+                            "Authorization": f"Bearer {self.groq_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
 
-            if response.status_code == 429:
-                wait = int(response.headers.get("retry-after", 2 ** (attempt + 1)))
-                logger.warning("Groq rate limit hit — retrying in %ss (attempt %s/5)", wait, attempt + 1)
-                await asyncio.sleep(wait)
-                continue
+                if response.status_code == 429:
+                    wait = int(response.headers.get("retry-after", 2 ** (attempt + 1)))
+                    logger.warning("Groq rate limit hit — retrying in %ss (attempt %s/5)", wait, attempt + 1)
+                    await asyncio.sleep(wait)
+                    continue
 
-            response.raise_for_status()
-            text = response.json()["choices"][0]["message"]["content"]
-            return self._parse_json(text) if json_mode else text
+                response.raise_for_status()
+                text = response.json()["choices"][0]["message"]["content"]
+                return self._parse_json(text) if json_mode else text
 
-        raise RuntimeError("Groq rate limit: all 5 retry attempts exhausted.")
+            raise RuntimeError("Groq rate limit: all 5 retry attempts exhausted.")
 
     async def _generate_nim(self, prompt: str, json_mode: bool):
         """NVIDIA NIM API via OpenAI SDK. Skips reasoning_content, uses content only."""
@@ -484,7 +588,7 @@ If the project is not strongly class-oriented (e.g. a functional frontend), prod
         client = AsyncOpenAI(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key=self.nim_api_key,
-            timeout=60.0,
+            timeout=180.0,
         )
 
         # Thinking disabled for analysis — structured JSON calls don't need deep reasoning
@@ -578,9 +682,12 @@ If the project is not strongly class-oriented (e.g. a functional frontend), prod
     # ------------------------------------------------------------------
 
     async def _generate_gemini(self, prompt: str, json_mode: bool):
-        import google.generativeai as genai  # noqa: F401 — already configured in __init__
-        response = self.model.generate_content(prompt)
-        text = response.text
+        response = await asyncio.to_thread(
+            self._gemini_client.models.generate_content,
+            model=self._gemini_model,
+            contents=prompt,
+        )
+        text = response.text or ""
         return self._parse_json(text) if json_mode else text
 
     # ------------------------------------------------------------------

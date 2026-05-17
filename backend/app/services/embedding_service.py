@@ -35,6 +35,7 @@ _RERANK_ENABLED = os.getenv("ENABLE_RERANK", "true").lower() not in ("false", "0
 
 _EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 _RERANK_MODEL = os.getenv("RERANK_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
+_FASTEMBED_CACHE_DIR = os.getenv("FASTEMBED_CACHE_DIR") or None  # None → default ~/.cache/fastembed
 
 if _RAG_ENABLED:
     import chromadb
@@ -82,7 +83,10 @@ class _FastEmbedEmbedding:
     def __init__(self, model_name: str):
         from fastembed import TextEmbedding
         logger.info("Loading embedding model: %s (first run will download ONNX)", model_name)
-        self.model = TextEmbedding(model_name=model_name)
+        kwargs = {"model_name": model_name}
+        if _FASTEMBED_CACHE_DIR:
+            kwargs["cache_dir"] = _FASTEMBED_CACHE_DIR
+        self.model = TextEmbedding(**kwargs)
         self._name = model_name
 
     def name(self) -> str:
@@ -105,7 +109,10 @@ def _get_reranker():
     if _reranker is None and _RERANK_ENABLED:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
         logger.info("Loading reranker: %s (first run will download ONNX)", _RERANK_MODEL)
-        _reranker = TextCrossEncoder(model_name=_RERANK_MODEL)
+        kwargs = {"model_name": _RERANK_MODEL}
+        if _FASTEMBED_CACHE_DIR:
+            kwargs["cache_dir"] = _FASTEMBED_CACHE_DIR
+        _reranker = TextCrossEncoder(**kwargs)
     return _reranker
 
 
